@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>E-commerce API Documentation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            line-height: 1.6;
+        }
+        .endpoint {
+            background: #f4f4f4;
+            padding: 15px;
+            margin: 10px 0;
+            border-left: 4px solid #007bff;
+        }
+        .method {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-weight: bold;
+            color: white;
+            margin-right: 10px;
+        }
+        .get { background: #28a745; }
+        .post { background: #007bff; }
+        .put { background: #ffc107; color: #000; }
+        .patch { background: #17a2b8; }
+        .delete { background: #dc3545; }
+        code {
+            background: #eee;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+        .test-btn {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>E-commerce API Documentation</h1>
+    
+    <h2>Quick Links</h2>
+    <ul>
+        <li><a href="/admin/">Admin Panel</a> (Requires login)</li>
+        <li><a href="/api/catalog/products/">Products API</a></li>
+        <li><a href="/api/catalog/variants/">Variants API</a></li>
+        <li><a href="/health/">Health Check</a></li>
+    </ul>
+    
+    <h2>API Endpoints</h2>
+    
+    <h3>Catalog</h3>
+    
+    <div class="endpoint">
+        <span class="method get">GET</span>
+        <strong>/api/catalog/products/</strong>
+        <p>List all products</p>
+        <a href="/api/catalog/products/" class="test-btn" target="_blank">Test</a>
+    </div>
+    
+    <div class="endpoint">
+        <span class="method post">POST</span>
+        <strong>/api/catalog/products/</strong>
+        <p>Create a new product</p>
+        <code>Body: {"name": "Product Name", "slug": "product-slug", ...}</code>
+    </div>
+    
+    <div class="endpoint">
+        <span class="method get">GET</span>
+        <strong>/api/catalog/variants/</strong>
+        <p>List all variants</p>
+        <a href="/api/catalog/variants/" class="test-btn" target="_blank">Test</a>
+    </div>
+    
+    <div class="endpoint">
+        <span class="method get">GET</span>
+        <strong>/api/catalog/variants/{id}/</strong>
+        <p>Get variant details</p>
+    </div>
+    
+    <h3>Health</h3>
+    <div class="endpoint">
+        <span class="method get">GET</span>
+        <strong>/health/</strong>
+        <p>Health check endpoint</p>
+        <a href="/health/" class="test-btn" target="_blank">Test</a>
+    </div>
+    
+    <h2>Sample Data</h2>
+    <p>The system is pre-loaded with sample data including:</p>
+    <ul>
+        <li>Sneaker X with White, Red, and Blue variants</li>
+        <li>Basic T-Shirt with multiple sizes and colors</li>
+        <li>Inventory with inbound shipments</li>
+        <li>Promotions with time-based discounts</li>
+    </ul>
+    
+    <h2>Testing Instructions</h2>
+    <ol>
+        <li>Use the "Test" buttons above to try GET endpoints</li>
+        <li>For POST/PUT endpoints, use tools like Postman or curl</li>
+        <li>Check the <a href="/admin/">admin panel</a> for data management</li>
+        <li>Run <code>python scripts/test_api.py</code> for automated tests</li>
+    </ol>
+    
+    <h2>Scenario Examples</h2>
+    <p>See <code>scripts/seed_data.py</code> for implementation of:</p>
+    <ul>
+        <li>Red sneakers: Out of stock, inbound in 5 days, discount starts in 7 days</li>
+        <li>Blue sneakers: Discount ends tomorrow</li>
+        <li>Overlapping discounts with priority rules</li>
+        <li>Scheduled new arrivals launch</li>
+    </ul>
+</body>
+</html>
