@@ -33,7 +33,7 @@ INSTALLED_APPS = [
     # Third party apps
     'rest_framework',
     'django_filters',
-    'rest_framework_swagger',  # Swagger for API docs
+    'rest_framework_swagger',
     'django_celery_beat',
     'safedelete',
     'timezone_field',
