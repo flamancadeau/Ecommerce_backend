@@ -8,45 +8,126 @@ class Migration(migrations.Migration):
 
     initial = True
 
-    dependencies = [
-    ]
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
-            name='IdempotencyKey',
+            name="IdempotencyKey",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('key', models.CharField(db_index=True, max_length=100, unique=True)),
-                ('request_hash', models.CharField(db_index=True, help_text='SHA256 hash of request', max_length=64)),
-                ('response', models.JSONField(blank=True, null=True)),
-                ('status', models.CharField(choices=[('processing', 'Processing'), ('completed', 'Completed'), ('failed', 'Failed')], default='processing', max_length=20)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('expires_at', models.DateTimeField()),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("key", models.CharField(db_index=True, max_length=100, unique=True)),
+                (
+                    "request_hash",
+                    models.CharField(
+                        db_index=True, help_text="SHA256 hash of request", max_length=64
+                    ),
+                ),
+                ("response", models.JSONField(blank=True, null=True)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("processing", "Processing"),
+                            ("completed", "Completed"),
+                            ("failed", "Failed"),
+                        ],
+                        default="processing",
+                        max_length=20,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("expires_at", models.DateTimeField()),
             ],
             options={
-                'ordering': ['-created_at'],
-                'indexes': [models.Index(fields=['key'], name='scheduler_i_key_52bbc7_idx'), models.Index(fields=['request_hash'], name='scheduler_i_request_b6106e_idx'), models.Index(fields=['status'], name='scheduler_i_status_ebd340_idx'), models.Index(fields=['expires_at'], name='scheduler_i_expires_43f786_idx')],
+                "ordering": ["-created_at"],
+                "indexes": [
+                    models.Index(fields=["key"], name="scheduler_i_key_52bbc7_idx"),
+                    models.Index(
+                        fields=["request_hash"], name="scheduler_i_request_b6106e_idx"
+                    ),
+                    models.Index(
+                        fields=["status"], name="scheduler_i_status_ebd340_idx"
+                    ),
+                    models.Index(
+                        fields=["expires_at"], name="scheduler_i_expires_43f786_idx"
+                    ),
+                ],
             },
         ),
         migrations.CreateModel(
-            name='ScheduledJob',
+            name="ScheduledJob",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('job_type', models.CharField(choices=[('campaign_activation', 'Campaign Activation'), ('campaign_expiration', 'Campaign Expiration'), ('reservation_expiry', 'Reservation Expiry'), ('inbound_receipt', 'Inbound Receipt Processing'), ('price_update', 'Price Update'), ('inventory_reorder', 'Inventory Reorder'), ('data_cleanup', 'Data Cleanup'), ('report_generation', 'Report Generation')], max_length=50)),
-                ('scheduled_at', models.DateTimeField()),
-                ('executed_at', models.DateTimeField(blank=True, null=True)),
-                ('status', models.CharField(choices=[('pending', 'Pending'), ('running', 'Running'), ('completed', 'Completed'), ('failed', 'Failed'), ('cancelled', 'Cancelled')], default='pending', max_length=20)),
-                ('payload', models.JSONField(blank=True, default=dict)),
-                ('result', models.JSONField(blank=True, null=True)),
-                ('error', models.TextField(blank=True)),
-                ('retry_count', models.IntegerField(default=0)),
-                ('max_retries', models.IntegerField(default=3)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "job_type",
+                    models.CharField(
+                        choices=[
+                            ("campaign_activation", "Campaign Activation"),
+                            ("campaign_expiration", "Campaign Expiration"),
+                            ("reservation_expiry", "Reservation Expiry"),
+                            ("inbound_receipt", "Inbound Receipt Processing"),
+                            ("price_update", "Price Update"),
+                            ("inventory_reorder", "Inventory Reorder"),
+                            ("data_cleanup", "Data Cleanup"),
+                            ("report_generation", "Report Generation"),
+                        ],
+                        max_length=50,
+                    ),
+                ),
+                ("scheduled_at", models.DateTimeField()),
+                ("executed_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("pending", "Pending"),
+                            ("running", "Running"),
+                            ("completed", "Completed"),
+                            ("failed", "Failed"),
+                            ("cancelled", "Cancelled"),
+                        ],
+                        default="pending",
+                        max_length=20,
+                    ),
+                ),
+                ("payload", models.JSONField(blank=True, default=dict)),
+                ("result", models.JSONField(blank=True, null=True)),
+                ("error", models.TextField(blank=True)),
+                ("retry_count", models.IntegerField(default=0)),
+                ("max_retries", models.IntegerField(default=3)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
             ],
             options={
-                'ordering': ['scheduled_at'],
-                'indexes': [models.Index(fields=['job_type', 'status'], name='scheduler_s_job_typ_bdabf1_idx'), models.Index(fields=['scheduled_at'], name='scheduler_s_schedul_748f58_idx'), models.Index(fields=['status'], name='scheduler_s_status_d40b7a_idx')],
+                "ordering": ["scheduled_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["job_type", "status"],
+                        name="scheduler_s_job_typ_bdabf1_idx",
+                    ),
+                    models.Index(
+                        fields=["scheduled_at"], name="scheduler_s_schedul_748f58_idx"
+                    ),
+                    models.Index(
+                        fields=["status"], name="scheduler_s_status_d40b7a_idx"
+                    ),
+                ],
             },
         ),
     ]

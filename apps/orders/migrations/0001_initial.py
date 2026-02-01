@@ -11,114 +11,376 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('catalog', '0001_initial'),
-        ('inventory', '0001_initial'),
+        ("catalog", "0001_initial"),
+        ("inventory", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='Cart',
+            name="Cart",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('session_id', models.CharField(blank=True, db_index=True, max_length=100, null=True)),
-                ('user_id', models.UUIDField(blank=True, db_index=True, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('expires_at', models.DateTimeField(blank=True, null=True)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "session_id",
+                    models.CharField(
+                        blank=True, db_index=True, max_length=100, null=True
+                    ),
+                ),
+                ("user_id", models.UUIDField(blank=True, db_index=True, null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("expires_at", models.DateTimeField(blank=True, null=True)),
             ],
             options={
-                'ordering': ['-created_at'],
-                'indexes': [models.Index(fields=['session_id'], name='orders_cart_session_abbc1c_idx'), models.Index(fields=['user_id'], name='orders_cart_user_id_7d3dad_idx'), models.Index(fields=['expires_at'], name='orders_cart_expires_6fbde1_idx')],
+                "ordering": ["-created_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["session_id"], name="orders_cart_session_abbc1c_idx"
+                    ),
+                    models.Index(
+                        fields=["user_id"], name="orders_cart_user_id_7d3dad_idx"
+                    ),
+                    models.Index(
+                        fields=["expires_at"], name="orders_cart_expires_6fbde1_idx"
+                    ),
+                ],
             },
         ),
         migrations.CreateModel(
-            name='Order',
+            name="Order",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('order_number', models.CharField(db_index=True, max_length=50, unique=True)),
-                ('customer_id', models.UUIDField(blank=True, db_index=True, null=True)),
-                ('customer_email', models.EmailField(max_length=254)),
-                ('shipping_address', models.JSONField()),
-                ('billing_address', models.JSONField()),
-                ('currency', models.CharField(default='EUR', max_length=3)),
-                ('subtotal', models.DecimalField(decimal_places=2, max_digits=12, validators=[django.core.validators.MinValueValidator(0)])),
-                ('tax_amount', models.DecimalField(decimal_places=2, max_digits=12, validators=[django.core.validators.MinValueValidator(0)])),
-                ('shipping_amount', models.DecimalField(decimal_places=2, default=0, max_digits=10)),
-                ('discount_amount', models.DecimalField(decimal_places=2, default=0, max_digits=10)),
-                ('total', models.DecimalField(decimal_places=2, max_digits=12, validators=[django.core.validators.MinValueValidator(0)])),
-                ('status', models.CharField(choices=[('draft', 'Draft'), ('pending', 'Pending Payment'), ('confirmed', 'Confirmed'), ('processing', 'Processing'), ('ready_to_ship', 'Ready to Ship'), ('shipped', 'Shipped'), ('delivered', 'Delivered'), ('cancelled', 'Cancelled'), ('refunded', 'Refunded')], default='draft', max_length=20)),
-                ('payment_status', models.CharField(choices=[('pending', 'Pending'), ('authorized', 'Authorized'), ('paid', 'Paid'), ('failed', 'Failed'), ('refunded', 'Refunded'), ('partially_refunded', 'Partially Refunded')], default='pending', max_length=20)),
-                ('payment_method', models.CharField(blank=True, max_length=50)),
-                ('payment_reference', models.CharField(blank=True, max_length=100)),
-                ('notes', models.TextField(blank=True)),
-                ('ip_address', models.GenericIPAddressField(blank=True, null=True)),
-                ('user_agent', models.TextField(blank=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "order_number",
+                    models.CharField(db_index=True, max_length=50, unique=True),
+                ),
+                ("customer_id", models.UUIDField(blank=True, db_index=True, null=True)),
+                ("customer_email", models.EmailField(max_length=254)),
+                ("shipping_address", models.JSONField()),
+                ("billing_address", models.JSONField()),
+                ("currency", models.CharField(default="EUR", max_length=3)),
+                (
+                    "subtotal",
+                    models.DecimalField(
+                        decimal_places=2,
+                        max_digits=12,
+                        validators=[django.core.validators.MinValueValidator(0)],
+                    ),
+                ),
+                (
+                    "tax_amount",
+                    models.DecimalField(
+                        decimal_places=2,
+                        max_digits=12,
+                        validators=[django.core.validators.MinValueValidator(0)],
+                    ),
+                ),
+                (
+                    "shipping_amount",
+                    models.DecimalField(decimal_places=2, default=0, max_digits=10),
+                ),
+                (
+                    "discount_amount",
+                    models.DecimalField(decimal_places=2, default=0, max_digits=10),
+                ),
+                (
+                    "total",
+                    models.DecimalField(
+                        decimal_places=2,
+                        max_digits=12,
+                        validators=[django.core.validators.MinValueValidator(0)],
+                    ),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("draft", "Draft"),
+                            ("pending", "Pending Payment"),
+                            ("confirmed", "Confirmed"),
+                            ("processing", "Processing"),
+                            ("ready_to_ship", "Ready to Ship"),
+                            ("shipped", "Shipped"),
+                            ("delivered", "Delivered"),
+                            ("cancelled", "Cancelled"),
+                            ("refunded", "Refunded"),
+                        ],
+                        default="draft",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "payment_status",
+                    models.CharField(
+                        choices=[
+                            ("pending", "Pending"),
+                            ("authorized", "Authorized"),
+                            ("paid", "Paid"),
+                            ("failed", "Failed"),
+                            ("refunded", "Refunded"),
+                            ("partially_refunded", "Partially Refunded"),
+                        ],
+                        default="pending",
+                        max_length=20,
+                    ),
+                ),
+                ("payment_method", models.CharField(blank=True, max_length=50)),
+                ("payment_reference", models.CharField(blank=True, max_length=100)),
+                ("notes", models.TextField(blank=True)),
+                ("ip_address", models.GenericIPAddressField(blank=True, null=True)),
+                ("user_agent", models.TextField(blank=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
             ],
             options={
-                'ordering': ['-created_at'],
-                'indexes': [models.Index(fields=['order_number'], name='orders_orde_order_n_f3ada5_idx'), models.Index(fields=['customer_id'], name='orders_orde_custome_59b6fb_idx'), models.Index(fields=['customer_email'], name='orders_orde_custome_ca0107_idx'), models.Index(fields=['status'], name='orders_orde_status_c6dd84_idx'), models.Index(fields=['payment_status'], name='orders_orde_payment_bc131d_idx'), models.Index(fields=['created_at'], name='orders_orde_created_0e92de_idx')],
+                "ordering": ["-created_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["order_number"], name="orders_orde_order_n_f3ada5_idx"
+                    ),
+                    models.Index(
+                        fields=["customer_id"], name="orders_orde_custome_59b6fb_idx"
+                    ),
+                    models.Index(
+                        fields=["customer_email"], name="orders_orde_custome_ca0107_idx"
+                    ),
+                    models.Index(
+                        fields=["status"], name="orders_orde_status_c6dd84_idx"
+                    ),
+                    models.Index(
+                        fields=["payment_status"], name="orders_orde_payment_bc131d_idx"
+                    ),
+                    models.Index(
+                        fields=["created_at"], name="orders_orde_created_0e92de_idx"
+                    ),
+                ],
             },
         ),
         migrations.CreateModel(
-            name='CartItem',
+            name="CartItem",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('quantity', models.IntegerField(default=1, validators=[django.core.validators.MinValueValidator(1)])),
-                ('unit_price', models.DecimalField(blank=True, decimal_places=2, max_digits=10, null=True)),
-                ('added_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('cart', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='items', to='orders.cart')),
-                ('variant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='catalog.variant')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "quantity",
+                    models.IntegerField(
+                        default=1,
+                        validators=[django.core.validators.MinValueValidator(1)],
+                    ),
+                ),
+                (
+                    "unit_price",
+                    models.DecimalField(
+                        blank=True, decimal_places=2, max_digits=10, null=True
+                    ),
+                ),
+                ("added_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "cart",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="items",
+                        to="orders.cart",
+                    ),
+                ),
+                (
+                    "variant",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="catalog.variant",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-added_at'],
-                'indexes': [models.Index(fields=['cart', 'variant'], name='orders_cart_cart_id_02c352_idx')],
-                'unique_together': {('cart', 'variant')},
+                "ordering": ["-added_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["cart", "variant"],
+                        name="orders_cart_cart_id_02c352_idx",
+                    )
+                ],
+                "unique_together": {("cart", "variant")},
             },
         ),
         migrations.CreateModel(
-            name='OrderItem',
+            name="OrderItem",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('quantity', models.IntegerField(validators=[django.core.validators.MinValueValidator(1)])),
-                ('unit_price', models.DecimalField(decimal_places=2, max_digits=10)),
-                ('discount_amount', models.DecimalField(decimal_places=2, default=0, max_digits=10)),
-                ('tax_amount', models.DecimalField(decimal_places=2, default=0, max_digits=10)),
-                ('total_price', models.DecimalField(decimal_places=2, max_digits=10)),
-                ('sku', models.CharField(max_length=100)),
-                ('variant_name', models.CharField(max_length=255)),
-                ('variant_attributes', models.JSONField(blank=True, default=dict)),
-                ('tax_rate', models.DecimalField(blank=True, decimal_places=3, max_digits=5, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('order', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='items', to='orders.order')),
-                ('variant', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to='catalog.variant')),
-                ('warehouse', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to='inventory.warehouse')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "quantity",
+                    models.IntegerField(
+                        validators=[django.core.validators.MinValueValidator(1)]
+                    ),
+                ),
+                ("unit_price", models.DecimalField(decimal_places=2, max_digits=10)),
+                (
+                    "discount_amount",
+                    models.DecimalField(decimal_places=2, default=0, max_digits=10),
+                ),
+                (
+                    "tax_amount",
+                    models.DecimalField(decimal_places=2, default=0, max_digits=10),
+                ),
+                ("total_price", models.DecimalField(decimal_places=2, max_digits=10)),
+                ("sku", models.CharField(max_length=100)),
+                ("variant_name", models.CharField(max_length=255)),
+                ("variant_attributes", models.JSONField(blank=True, default=dict)),
+                (
+                    "tax_rate",
+                    models.DecimalField(
+                        blank=True, decimal_places=3, max_digits=5, null=True
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "order",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="items",
+                        to="orders.order",
+                    ),
+                ),
+                (
+                    "variant",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        to="catalog.variant",
+                    ),
+                ),
+                (
+                    "warehouse",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        to="inventory.warehouse",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['order', 'created_at'],
-                'indexes': [models.Index(fields=['order', 'variant'], name='orders_orde_order_i_c8de3b_idx'), models.Index(fields=['sku'], name='orders_orde_sku_737ca0_idx')],
+                "ordering": ["order", "created_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["order", "variant"],
+                        name="orders_orde_order_i_c8de3b_idx",
+                    ),
+                    models.Index(fields=["sku"], name="orders_orde_sku_737ca0_idx"),
+                ],
             },
         ),
         migrations.CreateModel(
-            name='Reservation',
+            name="Reservation",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('reservation_token', models.CharField(db_index=True, max_length=100, unique=True)),
-                ('quantity', models.IntegerField(validators=[django.core.validators.MinValueValidator(1)])),
-                ('status', models.CharField(choices=[('pending', 'Pending'), ('confirmed', 'Confirmed'), ('expired', 'Expired'), ('cancelled', 'Cancelled'), ('consumed', 'Consumed by Order')], default='pending', max_length=20)),
-                ('expires_at', models.DateTimeField()),
-                ('metadata', models.JSONField(blank=True, default=dict)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('order', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='reservations', to='orders.order')),
-                ('variant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='catalog.variant')),
-                ('warehouse', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='inventory.warehouse')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "reservation_token",
+                    models.CharField(db_index=True, max_length=100, unique=True),
+                ),
+                (
+                    "quantity",
+                    models.IntegerField(
+                        validators=[django.core.validators.MinValueValidator(1)]
+                    ),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("pending", "Pending"),
+                            ("confirmed", "Confirmed"),
+                            ("expired", "Expired"),
+                            ("cancelled", "Cancelled"),
+                            ("consumed", "Consumed by Order"),
+                        ],
+                        default="pending",
+                        max_length=20,
+                    ),
+                ),
+                ("expires_at", models.DateTimeField()),
+                ("metadata", models.JSONField(blank=True, default=dict)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "order",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="reservations",
+                        to="orders.order",
+                    ),
+                ),
+                (
+                    "variant",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="catalog.variant",
+                    ),
+                ),
+                (
+                    "warehouse",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="inventory.warehouse",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-created_at'],
-                'indexes': [models.Index(fields=['reservation_token'], name='orders_rese_reserva_953162_idx'), models.Index(fields=['variant', 'warehouse'], name='orders_rese_variant_b77ae0_idx'), models.Index(fields=['status'], name='orders_rese_status_c4dc34_idx'), models.Index(fields=['expires_at'], name='orders_rese_expires_bc57d7_idx')],
+                "ordering": ["-created_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["reservation_token"],
+                        name="orders_rese_reserva_953162_idx",
+                    ),
+                    models.Index(
+                        fields=["variant", "warehouse"],
+                        name="orders_rese_variant_b77ae0_idx",
+                    ),
+                    models.Index(
+                        fields=["status"], name="orders_rese_status_c4dc34_idx"
+                    ),
+                    models.Index(
+                        fields=["expires_at"], name="orders_rese_expires_bc57d7_idx"
+                    ),
+                ],
             },
         ),
     ]

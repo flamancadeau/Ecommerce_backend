@@ -10,113 +10,233 @@ class Migration(migrations.Migration):
 
     initial = True
 
-    dependencies = [
-    ]
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
-            name='Category',
+            name="Category",
             fields=[
-                ('deleted', models.DateTimeField(db_index=True, editable=False, null=True)),
-                ('deleted_by_cascade', models.BooleanField(default=False, editable=False)),
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('name', models.CharField(max_length=100)),
-                ('slug', models.SlugField(max_length=100, unique=True)),
-                ('description', models.TextField(blank=True)),
-                ('is_active', models.BooleanField(default=True)),
-                ('parent', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='children', to='catalog.category')),
+                (
+                    "deleted",
+                    models.DateTimeField(db_index=True, editable=False, null=True),
+                ),
+                (
+                    "deleted_by_cascade",
+                    models.BooleanField(default=False, editable=False),
+                ),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("name", models.CharField(max_length=100)),
+                ("slug", models.SlugField(max_length=100, unique=True)),
+                ("description", models.TextField(blank=True)),
+                ("is_active", models.BooleanField(default=True)),
+                (
+                    "parent",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="children",
+                        to="catalog.category",
+                    ),
+                ),
             ],
             options={
-                'verbose_name_plural': 'categories',
-                'ordering': ['name'],
+                "verbose_name_plural": "categories",
+                "ordering": ["name"],
             },
         ),
         migrations.CreateModel(
-            name='Product',
+            name="Product",
             fields=[
-                ('deleted', models.DateTimeField(db_index=True, editable=False, null=True)),
-                ('deleted_by_cascade', models.BooleanField(default=False, editable=False)),
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('name', models.CharField(max_length=255)),
-                ('description', models.TextField(blank=True)),
-                ('slug', models.SlugField(max_length=255, unique=True)),
-                ('brand', models.CharField(blank=True, max_length=100)),
-                ('is_active', models.BooleanField(default=True)),
-                ('launch_date', models.DateTimeField(blank=True, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('category', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='catalog.category')),
+                (
+                    "deleted",
+                    models.DateTimeField(db_index=True, editable=False, null=True),
+                ),
+                (
+                    "deleted_by_cascade",
+                    models.BooleanField(default=False, editable=False),
+                ),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("name", models.CharField(max_length=255)),
+                ("description", models.TextField(blank=True)),
+                ("slug", models.SlugField(max_length=255, unique=True)),
+                ("brand", models.CharField(blank=True, max_length=100)),
+                ("is_active", models.BooleanField(default=True)),
+                ("launch_date", models.DateTimeField(blank=True, null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "category",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="catalog.category",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-created_at'],
+                "ordering": ["-created_at"],
             },
         ),
         migrations.CreateModel(
-            name='Variant',
+            name="Variant",
             fields=[
-                ('deleted', models.DateTimeField(db_index=True, editable=False, null=True)),
-                ('deleted_by_cascade', models.BooleanField(default=False, editable=False)),
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('sku', models.CharField(db_index=True, max_length=100, unique=True)),
-                ('attributes', models.JSONField(default=dict, help_text='Color, size, material etc.')),
-                ('base_price', models.DecimalField(decimal_places=2, max_digits=10, validators=[django.core.validators.MinValueValidator(0)])),
-                ('compare_at_price', models.DecimalField(blank=True, decimal_places=2, max_digits=10, null=True)),
-                ('cost_price', models.DecimalField(blank=True, decimal_places=2, max_digits=10, null=True)),
-                ('tax_class', models.CharField(default='standard', max_length=50)),
-                ('weight', models.DecimalField(blank=True, decimal_places=3, max_digits=8, null=True)),
-                ('dimensions', models.JSONField(blank=True, default=dict, help_text='Length, width, height in cm')),
-                ('is_active', models.BooleanField(default=True)),
-                ('images', models.JSONField(blank=True, default=list, help_text='List of image URLs/metadata')),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('product', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='variants', to='catalog.product')),
+                (
+                    "deleted",
+                    models.DateTimeField(db_index=True, editable=False, null=True),
+                ),
+                (
+                    "deleted_by_cascade",
+                    models.BooleanField(default=False, editable=False),
+                ),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("sku", models.CharField(db_index=True, max_length=100, unique=True)),
+                (
+                    "attributes",
+                    models.JSONField(
+                        default=dict, help_text="Color, size, material etc."
+                    ),
+                ),
+                (
+                    "base_price",
+                    models.DecimalField(
+                        decimal_places=2,
+                        max_digits=10,
+                        validators=[django.core.validators.MinValueValidator(0)],
+                    ),
+                ),
+                (
+                    "compare_at_price",
+                    models.DecimalField(
+                        blank=True, decimal_places=2, max_digits=10, null=True
+                    ),
+                ),
+                (
+                    "cost_price",
+                    models.DecimalField(
+                        blank=True, decimal_places=2, max_digits=10, null=True
+                    ),
+                ),
+                ("tax_class", models.CharField(default="standard", max_length=50)),
+                (
+                    "weight",
+                    models.DecimalField(
+                        blank=True, decimal_places=3, max_digits=8, null=True
+                    ),
+                ),
+                (
+                    "dimensions",
+                    models.JSONField(
+                        blank=True,
+                        default=dict,
+                        help_text="Length, width, height in cm",
+                    ),
+                ),
+                ("is_active", models.BooleanField(default=True)),
+                (
+                    "images",
+                    models.JSONField(
+                        blank=True,
+                        default=list,
+                        help_text="List of image URLs/metadata",
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "product",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="variants",
+                        to="catalog.product",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['sku'],
+                "ordering": ["sku"],
             },
         ),
         migrations.AddIndex(
-            model_name='category',
-            index=models.Index(fields=['slug'], name='catalog_cat_slug_695af4_idx'),
+            model_name="category",
+            index=models.Index(fields=["slug"], name="catalog_cat_slug_695af4_idx"),
         ),
         migrations.AddIndex(
-            model_name='category',
-            index=models.Index(fields=['is_active'], name='catalog_cat_is_acti_7db955_idx'),
+            model_name="category",
+            index=models.Index(
+                fields=["is_active"], name="catalog_cat_is_acti_7db955_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='product',
-            index=models.Index(fields=['slug'], name='catalog_pro_slug_2b1eb6_idx'),
+            model_name="product",
+            index=models.Index(fields=["slug"], name="catalog_pro_slug_2b1eb6_idx"),
         ),
         migrations.AddIndex(
-            model_name='product',
-            index=models.Index(fields=['is_active'], name='catalog_pro_is_acti_14fc6b_idx'),
+            model_name="product",
+            index=models.Index(
+                fields=["is_active"], name="catalog_pro_is_acti_14fc6b_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='product',
-            index=models.Index(fields=['launch_date'], name='catalog_pro_launch__e08853_idx'),
+            model_name="product",
+            index=models.Index(
+                fields=["launch_date"], name="catalog_pro_launch__e08853_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='product',
-            index=models.Index(fields=['brand'], name='catalog_pro_brand_f6911e_idx'),
+            model_name="product",
+            index=models.Index(fields=["brand"], name="catalog_pro_brand_f6911e_idx"),
         ),
         migrations.AddIndex(
-            model_name='product',
-            index=models.Index(fields=['category'], name='catalog_pro_categor_7c1c1f_idx'),
+            model_name="product",
+            index=models.Index(
+                fields=["category"], name="catalog_pro_categor_7c1c1f_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='variant',
-            index=models.Index(fields=['sku'], name='catalog_var_sku_93f218_idx'),
+            model_name="variant",
+            index=models.Index(fields=["sku"], name="catalog_var_sku_93f218_idx"),
         ),
         migrations.AddIndex(
-            model_name='variant',
-            index=models.Index(fields=['is_active'], name='catalog_var_is_acti_aad294_idx'),
+            model_name="variant",
+            index=models.Index(
+                fields=["is_active"], name="catalog_var_is_acti_aad294_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='variant',
-            index=models.Index(fields=['product', 'is_active'], name='catalog_var_product_4064cc_idx'),
+            model_name="variant",
+            index=models.Index(
+                fields=["product", "is_active"], name="catalog_var_product_4064cc_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='variant',
-            index=models.Index(fields=['base_price'], name='catalog_var_base_pr_e6ab34_idx'),
+            model_name="variant",
+            index=models.Index(
+                fields=["base_price"], name="catalog_var_base_pr_e6ab34_idx"
+            ),
         ),
     ]
