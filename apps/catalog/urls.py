@@ -5,10 +5,10 @@ from .views import CategoryViewSet
 from .views import VariantViewSet
 
 router = DefaultRouter()
-router.register(r'products', ProductViewSet, basename='product')
-router.register(r'categories', CategoryViewSet, basename='category')
-router.register(r'variants', VariantViewSet, basename='variant')
+router.register(r"products", ProductViewSet, basename="product")
+router.register(r"categories", CategoryViewSet, basename="category")
+router.register(r"variants", VariantViewSet, basename="variant")
 
 urlpatterns = [
-    path('', include(router.urls)), 
+    path("api/v1/", include(router.urls)),
 ]
