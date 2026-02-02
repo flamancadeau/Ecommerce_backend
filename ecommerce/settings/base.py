@@ -4,24 +4,48 @@ Django settings for ecommerce project.
 
 import os
 from pathlib import Path
-import environ
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-# Initialize environ
-env = environ.Env()
-environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 
-# SECURITY WARNING: keep the secret key used in production secret!
+try:
+    import environ
+
+    env = environ.Env()
+    environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
+except Exception:
+
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+    class SimpleEnv:
+        def __call__(self, key, default=None):
+            return os.getenv(key, default)
+
+        def bool(self, key, default=False):
+            val = os.getenv(key)
+            if val is None:
+                return default
+            return str(val).lower() in ("1", "true", "yes", "on")
+
+        def list(self, key, default=None):
+            val = os.getenv(key)
+            if val is None:
+                return default or []
+            return [i.strip() for i in val.split(",") if i.strip()]
+
+    env = SimpleEnv()
+
+
 SECRET_KEY = env("SECRET_KEY", default="django-insecure-change-this-in-production")
 
-# SECURITY WARNING: don't run with debug turned on in production!
+
 DEBUG = env.bool("DEBUG", default=True)
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
-# Application definition
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -32,10 +56,10 @@ INSTALLED_APPS = [
     # Third party apps
     "rest_framework",
     "django_filters",
-    "rest_framework_swagger",
     "django_celery_beat",
     "safedelete",
     "timezone_field",
+    "drf_yasg",
     "corsheaders",
     "django_extensions",
     # Local apps
@@ -59,11 +83,22 @@ MIDDLEWARE = [
     "apps.audit.middleware.AuditLogMiddleware",
 ]
 
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+]
+
 ROOT_URLCONF = "ecommerce.urls"
 
 TEMPLATES = [
     {
-        "BACKEND": "django.template.engine s.django.DjangoTemplates",
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
         "DIRS": [os.path.join(BASE_DIR, "templates")],
         "APP_DIRS": True,
         "OPTIONS": {
@@ -123,7 +158,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = env("TIME_ZONE", default="UTC")
+TIME_ZONE = env("TIME_ZONE", default="Africa/Kigali")
 USE_I18N = True
 USE_TZ = True
 
@@ -162,9 +197,10 @@ REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "utils.exceptions.custom_exception_handler",
 }
 
-# Celery
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
+
+# settings.py
+CELERY_BROKER_URL = env("REDIS_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = env("REDIS_URL", default="redis://localhost:6379/0")
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
@@ -172,6 +208,14 @@ CELERY_TIMEZONE = TIME_ZONE
 
 # Django Celery Beat
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# Periodic Task Schedule
+CELERY_BEAT_SCHEDULE = {
+    "expire-reservations-every-minute": {
+        "task": "apps.orders.tasks.auto_expire_system",
+        "schedule": 60.0,
+    },
+}
 
 # Safe Delete
 SAFE_DELETE_INTERPRET_UNDELETED_OBJECTS_AS_CREATED = True
