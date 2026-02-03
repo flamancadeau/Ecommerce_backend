@@ -4,7 +4,6 @@ from django.utils import timezone
 
 
 class IdempotencyKey(models.Model):
-    """Idempotency key for safe retries."""
 
     STATUS_CHOICES = [
         ("processing", "Processing"),
@@ -32,17 +31,21 @@ class IdempotencyKey(models.Model):
             models.Index(fields=["status"]),
             models.Index(fields=["expires_at"]),
         ]
+        verbose_name = "Idempotency Key"
+        verbose_name_plural = "Idempotency Keys"
 
     def __str__(self):
         return f"IdempotencyKey: {self.key[:20]}..."
 
     @property
     def is_expired(self):
+
+        if self.expires_at is None:
+            return False
         return self.expires_at < timezone.now()
 
 
 class ScheduledJob(models.Model):
-    """Scheduled background jobs."""
 
     JOB_TYPE_CHOICES = [
         ("campaign_activation", "Campaign Activation"),
@@ -83,13 +86,65 @@ class ScheduledJob(models.Model):
             models.Index(fields=["scheduled_at"]),
             models.Index(fields=["status"]),
         ]
+        verbose_name = "Scheduled Job"
+        verbose_name_plural = "Scheduled Jobs"
 
     def __str__(self):
-        return f"{self.job_type} scheduled for {self.scheduled_at}"
+        return f"{self.get_job_type_display()} scheduled for {self.scheduled_at}"
 
     @property
     def is_overdue(self):
+        """
+        Check if the job is overdue (past scheduled time and still pending).
+
+        Returns:
+            bool: True if job is pending and past scheduled time, False otherwise
+        """
+        # FIX: Add null check to prevent TypeError when scheduled_at is None
+        # This happens when creating new objects in Django admin
+        if self.scheduled_at is None:
+            return False
         return self.status == "pending" and self.scheduled_at < timezone.now()
 
-    def should_retry(self):
+    @property
+    def can_retry(self):
+
         return self.status == "failed" and self.retry_count < self.max_retries
+
+    def should_retry(self):
+
+        return self.can_retry
+
+    def mark_as_running(self):
+        """Mark the job as currently running."""
+        self.status = "running"
+        self.save(update_fields=["status", "updated_at"])
+
+    def mark_as_completed(self, result=None):
+
+        self.status = "completed"
+        self.executed_at = timezone.now()
+        if result is not None:
+            self.result = result
+        self.save(update_fields=["status", "executed_at", "result", "updated_at"])
+
+    def mark_as_failed(self, error_message=""):
+
+        self.status = "failed"
+        self.executed_at = timezone.now()
+        self.error = error_message
+        self.retry_count += 1
+        self.save(
+            update_fields=[
+                "status",
+                "executed_at",
+                "error",
+                "retry_count",
+                "updated_at",
+            ]
+        )
+
+    def mark_as_cancelled(self):
+        """Mark the job as cancelled."""
+        self.status = "cancelled"
+        self.save(update_fields=["status", "updated_at"])

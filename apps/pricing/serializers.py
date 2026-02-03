@@ -77,3 +77,29 @@ class TaxRateSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class PriceQuoteItemSerializer(serializers.Serializer):
+    variant_id = serializers.UUIDField()
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class CustomerContextSerializer(serializers.Serializer):
+    country = serializers.CharField(
+        max_length=2, required=False, help_text="ISO country code"
+    )
+    currency = serializers.CharField(max_length=3, required=False)
+    channel = serializers.CharField(max_length=50, required=False)
+    membership_tier = serializers.CharField(max_length=50, required=False)
+
+
+class PriceQuoteRequestSerializer(serializers.Serializer):
+    at = serializers.DateTimeField(
+        required=False, help_text="ISO timestamp, e.g. 2024-01-30T10:00:00Z"
+    )
+    customer_context = CustomerContextSerializer(required=False)
+    items = PriceQuoteItemSerializer(many=True)
+
+
+class ExplainPriceQuerySerializer(serializers.Serializer):
+    variant_id = serializers.UUIDField(help_text="UUID of the variant")

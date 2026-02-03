@@ -1,6 +1,5 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from django.utils import timezone
 from .models import IdempotencyKey, ScheduledJob
 
 
@@ -19,7 +18,7 @@ class IdempotencyKeyAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at", "is_expired", "has_response")
 
     def key_short(self, obj):
-        return obj.key[:20] + "..."
+        return obj.key[:20] + "..." if len(obj.key) > 20 else obj.key
 
     key_short.short_description = "Key"
 
@@ -27,13 +26,11 @@ class IdempotencyKeyAdmin(admin.ModelAdmin):
         return obj.is_expired
 
     is_expired.boolean = True
-    is_expired.short_description = "Expired"
 
     def has_response(self, obj):
         return obj.response is not None
 
     has_response.boolean = True
-    has_response.short_description = "Has Response"
 
 
 @admin.register(ScheduledJob)
@@ -55,10 +52,8 @@ class ScheduledJobAdmin(admin.ModelAdmin):
         return obj.is_overdue
 
     is_overdue.boolean = True
-    is_overdue.short_description = "Overdue"
 
     def has_error(self, obj):
         return bool(obj.error)
 
     has_error.boolean = True
-    has_error.short_description = "Has Error"

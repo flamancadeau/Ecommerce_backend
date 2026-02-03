@@ -28,6 +28,7 @@ urlpatterns = [
     path("api/pricing/", include("apps.pricing.urls")),
     path("api/promotions/", include("apps.promotions.urls")),
     path("api/orders/", include("apps.orders.urls")),
+    path("api/scheduler/", include("apps.scheduler.urls")),
     re_path(
         r"^swagger(?P<format>\.json|\.yaml)$",
         schema_view.without_ui(cache_timeout=0),
