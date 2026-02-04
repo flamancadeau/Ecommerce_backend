@@ -4,7 +4,9 @@ from django.db import transaction
 import logging
 
 from apps.orders.models import Reservation
-from apps.inventory.models import Stock, InventoryAudit
+from apps.inventory.models import Stock
+from apps.audit.models import InventoryAudit
+
 from apps.scheduler.models import ScheduledJob
 
 logger = logging.getLogger(__name__)
@@ -32,20 +34,17 @@ def expire_old_reservations(self):
     for reservation in reservations:
         try:
             with transaction.atomic():
-                # Lock stock row to prevent race conditions
+
                 stock = Stock.objects.select_for_update().get(
                     variant=reservation.variant, warehouse=reservation.warehouse
                 )
 
-                # Release reserved quantity safely
                 stock.reserved = max(0, stock.reserved - reservation.quantity)
                 stock.save(update_fields=["reserved"])
 
-                # Expire reservation
                 reservation.status = "expired"
                 reservation.save(update_fields=["status"])
 
-                # Inventory audit trail
                 InventoryAudit.objects.create(
                     event_type="release",
                     variant=reservation.variant,

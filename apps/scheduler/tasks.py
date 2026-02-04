@@ -1,7 +1,7 @@
-from apps.audit import models
+from functools import cache
+from django.db.models import F
 from celery import shared_task
 from django.utils import timezone
-from django.core.cache import cache
 from datetime import timedelta
 import logging
 
@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 @shared_task
 def execute_scheduled_job(job_id):
-
     try:
         job = ScheduledJob.objects.get(id=job_id)
 
@@ -31,26 +30,27 @@ def execute_scheduled_job(job_id):
         job.save()
 
         logger.info(f"Executed scheduled job {job_id}: {job.job_type}")
-
         return result
 
     except ScheduledJob.DoesNotExist:
         logger.error(f"Scheduled job {job_id} not found")
         raise
+
     except Exception as e:
+        if "job" in locals():
+            job.status = "failed"
+            job.error = str(e)
+            job.retry_count += 1
+            job.save()
 
-        job.status = "failed"
-        job.error = str(e)
-        job.retry_count += 1
-        job.save()
+            logger.error(f"Failed to execute job {job_id}: {str(e)}")
 
-        logger.error(f"Failed to execute job {job_id}: {str(e)}")
-
-        if job.should_retry():
-
-            retry_delay = 300
-            execute_scheduled_job.apply_async(args=[job_id], countdown=retry_delay)
-            logger.info(f"Scheduled retry for job {job_id} in {retry_delay} seconds")
+            if job.should_retry():
+                retry_delay = 300
+                execute_scheduled_job.apply_async(args=[job_id], countdown=retry_delay)
+                logger.info(
+                    f"Scheduled retry for job {job_id} in {retry_delay} seconds"
+                )
 
         raise
 
@@ -79,7 +79,6 @@ def execute_job_logic(job):
         campaign.is_active = False
         campaign.save()
 
-        # Clear cache
         cache.delete("active_campaigns")
 
         return {"action": "deactivated", "campaign": campaign.code}
@@ -139,26 +138,22 @@ def execute_job_logic(job):
         return {"action": "marked_arrived", "count": processed_count}
 
     elif job.job_type == "price_update":
-
         return {"action": "price_update", "updated": 0}
 
     elif job.job_type == "inventory_reorder":
-
         from apps.inventory.models import Stock
 
         low_stock_items = Stock.objects.filter(
-            available__lte=models.F("safety_stock")
+            available__lte=F("safety_stock")
         ).select_related("variant", "warehouse")
 
         reorder_count = 0
         for stock in low_stock_items:
-
             reorder_count += 1
 
         return {"action": "inventory_reorder", "reorders_created": reorder_count}
 
     elif job.job_type == "data_cleanup":
-
         now = timezone.now()
 
         expired_keys = IdempotencyKey.objects.filter(
@@ -181,13 +176,11 @@ def execute_job_logic(job):
         }
 
     elif job.job_type == "report_generation":
-
         report_data = {
             "timestamp": timezone.now().isoformat(),
             "type": payload.get("report_type", "general"),
             "data": {},
         }
-
         return {"action": "report_generated", "report": report_data}
 
     else:
@@ -204,7 +197,6 @@ def cleanup_expired_idempotency_keys():
     expired_keys.delete()
 
     logger.info(f"Cleaned up {deleted_count} expired idempotency keys")
-
     return {"deleted_count": deleted_count}
 
 
@@ -216,10 +208,8 @@ def check_overdue_jobs():
 
     processed_count = 0
     for job in overdue_jobs:
-
         execute_scheduled_job.delay(str(job.id))
         processed_count += 1
 
     logger.info(f"Processed {processed_count} overdue jobs")
-
     return {"overdue_jobs_processed": processed_count}

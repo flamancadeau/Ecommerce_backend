@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "rest_framework.authtoken",
     # Third party apps
     "rest_framework",
     "django_filters",
@@ -82,17 +83,6 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "apps.audit.middleware.AuditLogMiddleware",
-]
-
-MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
-    "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
 ROOT_URLCONF = "ecommerce.urls"
@@ -211,9 +201,26 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 # Periodic Task Schedule
+
 CELERY_BEAT_SCHEDULE = {
     "expire-reservations-every-minute": {
-        "task": "apps.orders.tasks.auto_expire_system",
+        "task": "apps.orders.tasks.expire_old_reservations",
+        "schedule": 60.0,
+    },
+    "update-product-cache-every-30-minutes": {
+        "task": "apps.catalog.tasks.update_product_cache",
+        "schedule": 1800.0,
+    },
+    "process-inbound-receipts-every-hour": {
+        "task": "apps.inventory.tasks.process_inbound_receipts",
+        "schedule": 3600.0,
+    },
+    "update-stock-cache-every-10-minutes": {
+        "task": "apps.inventory.tasks.update_stock_levels_cache",
+        "schedule": 600.0,
+    },
+    "check-campaign-activation-every-minute": {
+        "task": "apps.promotions.tasks.check_campaign_activations",
         "schedule": 60.0,
     },
 }

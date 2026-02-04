@@ -15,15 +15,14 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from .models import PriceBook, PriceBookEntry, TaxRate
+from apps.audit.models import PriceAudit
 from .serializers import (
     PriceBookSerializer,
     PriceBookEntrySerializer,
     TaxRateSerializer,
-    PriceQuoteRequestSerializer,  # added
-    ExplainPriceQuerySerializer,  # added
+    PriceQuoteRequestSerializer,
+    ExplainPriceQuerySerializer,
 )
-
-# ==================== CRUD VIEWSETS ====================
 
 
 class PriceBookViewSet(viewsets.ModelViewSet):
@@ -104,6 +103,16 @@ class PriceBookEntryViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         instance = serializer.save()
+
+        PriceAudit.objects.create(
+            variant=instance.variant,
+            price_book=instance.price_book,
+            price_book_entry=instance,
+            new_price=instance.price,
+            currency=instance.price_book.currency,
+            reason="Price entry created",
+        )
+
         return Response(
             {
                 "status": True,
@@ -114,7 +123,21 @@ class PriceBookEntryViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
+        entry = self.get_object()
+        old_price = entry.price
         instance = serializer.save()
+
+        if old_price != instance.price:
+            PriceAudit.objects.create(
+                variant=instance.variant,
+                price_book=instance.price_book,
+                price_book_entry=instance,
+                old_price=old_price,
+                new_price=instance.price,
+                currency=instance.price_book.currency,
+                reason="Price entry updated",
+            )
+
         return Response(
             {
                 "status": True,
@@ -209,9 +232,6 @@ class TaxRateViewSet(viewsets.ModelViewSet):
         return self.perform_destroy(instance)
 
 
-# ==================== PRICING ENGINE ====================
-
-
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def price_quote(request):
@@ -219,13 +239,10 @@ def price_quote(request):
     try:
         data = request.data
 
-        # 1. Parse the 'at' timestamp
         at_time = parse_timestamp(data.get("at"))
 
-        # 2. Get customer context
         customer_context = data.get("customer_context", {})
 
-        # 3. Process each item
         items_data = data.get("items", [])
         results = []
 
@@ -238,7 +255,6 @@ def price_quote(request):
             )
             results.append(item_result)
 
-        # 4. Calculate summary
         summary = {
             "subtotal": float(sum(item["extended_price"] for item in results)),
             "tax_total": float(sum(item["tax_amount"] for item in results)),
@@ -299,7 +315,6 @@ def explain_price(request):
 
         variant = get_object_or_404(Variant, id=variant_id)
 
-        # Get all data that would affect price
         base_price = get_base_price(variant, customer_context, at_time)
         campaigns = get_applicable_campaigns(
             variant, customer_context, at_time, quantity
@@ -308,12 +323,10 @@ def explain_price(request):
             customer_context.get("country", "DE"), variant.tax_class, at_time
         )
 
-        # Get final calculation
         final_calculation = calculate_item_price(
             variant_id, quantity, at_time, customer_context
         )
 
-        # Build explanation
         explanation = {
             "variant": {
                 "id": str(variant.id),
@@ -366,18 +379,15 @@ def explain_price(request):
         )
 
 
-# ==================== HELPER FUNCTIONS ====================
-
-
 def parse_timestamp(timestamp_str):
     """Parse timestamp string to datetime object."""
     try:
-        # Handle ISO format with Z
+
         if timestamp_str.endswith("Z"):
             timestamp_str = timestamp_str[:-1] + "+00:00"
         return datetime.fromisoformat(timestamp_str)
     except:
-        # Default to current time if parsing fails
+
         return timezone.now()
 
 
@@ -388,13 +398,10 @@ def calculate_item_price(variant_id, quantity, at_time, customer_context):
     from apps.catalog.models import Variant
     from apps.promotions.models import Campaign, CampaignRule, CampaignDiscount
 
-    # 1. Get the variant
     variant = get_object_or_404(Variant, id=variant_id)
 
-    # 2. Get base price (from price book or variant)
     base_price = get_base_price(variant, customer_context, at_time)
 
-    # 3. Find applicable campaigns
     applicable_campaigns = get_applicable_campaigns(
         variant=variant,
         customer_context=customer_context,
@@ -402,14 +409,26 @@ def calculate_item_price(variant_id, quantity, at_time, customer_context):
         quantity=quantity,
     )
 
-    # 4. Apply discounts (by priority)
     discount_amount = Decimal("0")
     applied_campaigns = []
 
-    # Sort campaigns by priority (highest first)
     applicable_campaigns.sort(key=lambda x: x.priority, reverse=True)
 
+    # Track if we can continue stacking
+    can_stack = True
+
     for campaign in applicable_campaigns:
+
+        if not can_stack:
+            break
+
+        is_exclusive = (
+            campaign.stacking_type == "none" or campaign.stacking_type == "exclusive"
+        )
+
+        if applied_campaigns and is_exclusive:
+            continue
+
         campaign_discount = calculate_campaign_discount(
             campaign=campaign, base_price=base_price, quantity=quantity
         )
@@ -431,15 +450,16 @@ def calculate_item_price(variant_id, quantity, at_time, customer_context):
                 }
             )
 
-    # 5. Calculate final price
+            if is_exclusive:
+                can_stack = False
+                break
+
     final_price = base_price - discount_amount
 
-    # Ensure price doesn't go below zero
     if final_price < Decimal("0"):
         final_price = Decimal("0")
         discount_amount = base_price
 
-    # 6. Calculate tax
     tax_rate = get_tax_rate(
         country=customer_context.get("country", "DE"),
         tax_class=variant.tax_class,
@@ -448,17 +468,14 @@ def calculate_item_price(variant_id, quantity, at_time, customer_context):
 
     tax_amount = final_price * tax_rate
 
-    # 7. Round to 2 decimal places
     final_price = final_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     tax_amount = tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     extended_price = final_price * quantity
     total_tax = tax_amount * quantity
     total_price = (final_price + tax_amount) * quantity
 
-    # 8. Check availability
     availability = check_availability(variant, quantity)
 
-    # 9. Get price book info
     price_book_info = get_price_book_info(variant, customer_context, at_time)
 
     return {
@@ -486,7 +503,7 @@ def get_base_price(variant, customer_context, at_time):
     Get base price from price book or variant.
     Priority: PriceBookEntry > Variant base_price
     """
-    # Look for price book entry
+
     price_entry = (
         PriceBookEntry.objects.filter(
             Q(variant=variant)
@@ -503,9 +520,9 @@ def get_base_price(variant, customer_context, at_time):
             price_book__is_active=True,
         )
         .order_by(
-            "variant",  # Exact variant match first
-            "product",  # Then product match
-            "category",  # Then category match
+            "variant",
+            "product",
+            "category",
         )
         .first()
     )
@@ -513,7 +530,6 @@ def get_base_price(variant, customer_context, at_time):
     if price_entry:
         return price_entry.price
 
-    # Fallback to variant base price
     return variant.base_price
 
 
@@ -523,7 +539,6 @@ def get_applicable_campaigns(variant, customer_context, at_time, quantity):
     """
     from apps.promotions.models import Campaign, CampaignRule
 
-    # Get all active campaigns at the time
     campaigns = Campaign.objects.filter(
         start_at__lte=at_time, end_at__gte=at_time, is_active=True
     )
@@ -531,15 +546,13 @@ def get_applicable_campaigns(variant, customer_context, at_time, quantity):
     applicable = []
 
     for campaign in campaigns:
-        # Check customer eligibility
+
         if not is_customer_eligible(campaign, customer_context):
             continue
 
-        # Check campaign rules
         if not does_campaign_apply(campaign, variant):
             continue
 
-        # Check quantity requirements
         if not meets_quantity_requirements(campaign, quantity):
             continue
 
@@ -550,21 +563,19 @@ def get_applicable_campaigns(variant, customer_context, at_time, quantity):
 
 def is_customer_eligible(campaign, customer_context):
     """Check if customer is eligible for campaign."""
-    # Check customer groups
+
     if campaign.customer_groups:
         customer_group = customer_context.get("membership_tier", "standard")
         if customer_group not in campaign.customer_groups:
             return False
 
-    # Check exclusions
     if campaign.excluded_customer_groups:
         customer_group = customer_context.get("membership_tier", "standard")
         if customer_group in campaign.excluded_customer_groups:
             return False
 
-    # Check minimum order amount (if applicable)
     if campaign.min_order_amount:
-        # This would need the total order amount to check
+
         pass
 
     return True
@@ -574,11 +585,9 @@ def does_campaign_apply(campaign, variant):
     """Check if campaign applies to variant based on rules."""
     rules = campaign.rules.all()
 
-    # If no rules, campaign applies to everything
     if not rules.exists():
         return True
 
-    # Check each rule
     for rule in rules:
         if rule.rule_type == "product":
             if rule.value == str(variant.product.id) and rule.scope == "include":
@@ -640,11 +649,9 @@ def calculate_campaign_discount(campaign, base_price, quantity):
     else:
         amount = Decimal("0")
 
-    # Apply maximum discount cap
     if discount.max_discount_amount:
         amount = min(amount, discount.max_discount_amount)
 
-    # Apply minimum price floor
     if discount.min_price:
         final_price = max(base_price - amount, discount.min_price)
         amount = base_price - final_price
@@ -662,7 +669,7 @@ def get_tax_rate(country, tax_class, at_time):
         is_active=True,
     ).first()
 
-    return tax_rate.rate if tax_rate else Decimal("0.19")  # Default 19%
+    return tax_rate.rate if tax_rate else Decimal("0.19")
 
 
 def get_price_book_info(variant, customer_context, at_time):

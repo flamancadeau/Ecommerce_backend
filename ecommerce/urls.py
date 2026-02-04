@@ -3,7 +3,6 @@ from django.urls import path, re_path, include
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
-from django.http import HttpResponse
 
 schema_view = get_schema_view(
     openapi.Info(
@@ -16,13 +15,8 @@ schema_view = get_schema_view(
 )
 
 
-def homepage(request):
-    return HttpResponse("Welcome to the Ecommerce API!")
-
-
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("", homepage),
     path("api/catalog/", include("apps.catalog.urls")),
     path("api/inventory/", include("apps.inventory.urls")),
     path("api/pricing/", include("apps.pricing.urls")),

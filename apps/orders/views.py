@@ -10,6 +10,7 @@ import uuid
 
 from .models import Cart, CartItem, Order, OrderItem, Reservation
 from .serializers import CartSerializer, CartItemSerializer, OrderSerializer
+from apps.audit.idempotency import idempotent_request
 from apps.catalog.models import Variant
 from apps.inventory.models import Stock, Warehouse
 
@@ -89,9 +90,16 @@ class CartViewSet(viewsets.ModelViewSet):
             raise ValidationError("Quantity must be greater than 0")
 
         try:
-            variant = Variant.objects.get(id=variant_id, is_active=True)
+            variant = Variant.objects.select_related("product").get(
+                id=variant_id, is_active=True
+            )
         except Variant.DoesNotExist:
             raise ValidationError("Product variant not found")
+
+        if variant.product.launch_date and variant.product.launch_date > timezone.now():
+            raise ValidationError(
+                f"This product will be available on {variant.product.launch_date}"
+            )
 
         available_stock = self._check_availability(variant, quantity)
         if available_stock < quantity:
@@ -195,6 +203,7 @@ class CheckoutViewSet(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
 
     @action(detail=False, methods=["post"], url_path="create-order")
+    @idempotent_request()
     @transaction.atomic
     def create_order(self, request):
         """Create order from cart"""
@@ -218,31 +227,76 @@ class CheckoutViewSet(viewsets.ViewSet):
         if not cart.items.exists():
             raise ValidationError("Cart is empty")
 
+        # Get active warehouse first
+        warehouse = Warehouse.objects.filter(is_active=True).first()
+        if not warehouse:
+            raise ValidationError("No active warehouse available")
+
         subtotal = Decimal("0")
         order_items_data = []
 
-        for cart_item in cart.items.all().select_related("variant"):
+        # Lock and update stock for each item
+        for cart_item in cart.items.all().select_related("variant", "variant__product"):
+            variant = cart_item.variant
+            quantity = cart_item.quantity
 
-            available = self._check_variant_availability(
-                cart_item.variant, cart_item.quantity
+            if (
+                variant.product.launch_date
+                and variant.product.launch_date > timezone.now()
+            ):
+                raise ValidationError(
+                    f"Product {variant.sku} is not available until {variant.product.launch_date}"
+                )
+
+            try:
+
+                stock = Stock.objects.select_for_update().get(
+                    variant=variant, warehouse=warehouse
+                )
+            except Stock.DoesNotExist:
+                raise ValidationError(f"Stock not found for {variant.sku}")
+
+            if stock.available < quantity:
+
+                if not (
+                    stock.backorderable
+                    and (
+                        stock.backorder_limit == 0 or quantity <= stock.backorder_limit
+                    )
+                ):
+                    raise ValidationError(
+                        f"Insufficient stock for {variant.sku}. Available: {stock.available}"
+                    )
+
+            old_qty = stock.on_hand
+            stock.on_hand -= quantity
+            stock.save()
+
+            from apps.audit.models import InventoryAudit
+
+            InventoryAudit.objects.create(
+                event_type="fulfillment",
+                variant=variant,
+                warehouse=warehouse,
+                quantity=quantity,
+                from_quantity=old_qty,
+                to_quantity=stock.on_hand,
+                notes="Order fulfillment",
             )
-            if available < cart_item.quantity:
-                raise ValidationError(f"Insufficient stock for {cart_item.variant.sku}")
 
-            item_total = cart_item.unit_price * Decimal(cart_item.quantity)
+            item_total = cart_item.unit_price * Decimal(quantity)
             subtotal += item_total
 
             order_items_data.append(
                 {
-                    "variant": cart_item.variant,
-                    "quantity": cart_item.quantity,
+                    "variant": variant,
+                    "quantity": quantity,
                     "unit_price": cart_item.unit_price,
-                    "sku": cart_item.variant.sku,
+                    "sku": variant.sku,
                     "variant_name": (
-                        cart_item.variant.product.name
-                        if cart_item.variant.product
-                        else cart_item.variant.sku
+                        variant.product.name if variant.product else variant.sku
                     ),
+                    "warehouse": warehouse,
                 }
             )
 
@@ -263,14 +317,10 @@ class CheckoutViewSet(viewsets.ViewSet):
             status="confirmed",
         )
 
-        warehouse = Warehouse.objects.filter(is_active=True).first()
-        if not warehouse:
-            raise ValidationError("No active warehouse available")
-
         for item_data in order_items_data:
             OrderItem.objects.create(
                 order=order,
-                warehouse=warehouse,
+                warehouse=item_data["warehouse"],
                 variant=item_data["variant"],
                 quantity=item_data["quantity"],
                 unit_price=item_data["unit_price"],

@@ -1,4 +1,4 @@
-from apps.inventory import models
+from django.db import models
 from celery import shared_task
 from django.utils import timezone
 from django.core.cache import cache
@@ -6,6 +6,7 @@ from datetime import timedelta
 import logging
 from apps.inventory.models import InboundShipment, Stock
 from apps.scheduler.models import ScheduledJob
+from apps.catalog.models import Variant
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +56,13 @@ def update_stock_levels_cache():
     """
     Update Redis cache with stock levels for fast access.
     """
-    from django.db.models import Sum
-
-    from apps.catalog.models import Variant
-
     variants = Variant.objects.filter(is_active=True)
 
     for variant in variants:
         total_available = (
-            Stock.objects.filter(variant=variant).aggregate(Sum("available"))[
-                "available__sum"
-            ]
+            Stock.objects.filter(variant=variant).aggregate(
+                total=models.Sum("available")
+            )["total"]
             or 0
         )
 

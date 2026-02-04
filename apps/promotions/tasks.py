@@ -2,8 +2,9 @@ from apps.promotions.models import Campaign
 from celery import shared_task
 from django.utils import timezone
 from django.core.cache import cache
-from datetime import timedelta
+from django.utils.dateparse import parse_datetime
 import logging
+
 from apps.scheduler.models import ScheduledJob
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ def check_campaign_activations():
     activated_count = 0
     for campaign in campaigns_to_activate:
         campaign.is_active = True
-        campaign.save()
+        campaign.save(update_fields=["is_active"])
         activated_count += 1
 
         logger.info(f"Activated campaign: {campaign.code}")
@@ -42,7 +43,7 @@ def check_campaign_activations():
     deactivated_count = 0
     for campaign in campaigns_to_deactivate:
         campaign.is_active = False
-        campaign.save()
+        campaign.save(update_fields=["is_active"])
         deactivated_count += 1
 
         logger.info(f"Deactivated campaign: {campaign.code}")
@@ -55,6 +56,7 @@ def check_campaign_activations():
             payload={"campaign_id": str(campaign.id), "action": "deactivated"},
         )
 
+    # Clear cache if changes happened
     if activated_count > 0 or deactivated_count > 0:
         cache.delete("active_campaigns")
         cache.delete("campaign_rules")
@@ -66,12 +68,26 @@ def check_campaign_activations():
     }
 
 
-@shared_task
-def create_campaign_schedule(campaign_id, action, schedule_at):
+@shared_task(bind=True)
+def create_campaign_schedule(self, campaign_id, action, schedule_at):
+    """
+    Create a scheduled job to activate/deactivate campaign at specific time.
+    """
 
-    campaign = Campaign.objects.get(id=campaign_id)
+    if isinstance(schedule_at, str):
+        schedule_at = parse_datetime(schedule_at)
 
-    ScheduledJob.objects.create(
+    if schedule_at is None:
+        logger.error("Invalid schedule_at value")
+        return {"error": "Invalid schedule_at"}
+
+    try:
+        campaign = Campaign.objects.get(id=campaign_id)
+    except Campaign.DoesNotExist:
+        logger.error(f"Campaign not found: {campaign_id}")
+        return {"error": "Campaign not found"}
+
+    job = ScheduledJob.objects.create(
         job_type=f"campaign_{action}",
         scheduled_at=schedule_at,
         status="pending",
@@ -83,3 +99,5 @@ def create_campaign_schedule(campaign_id, action, schedule_at):
     )
 
     logger.info(f"Scheduled {action} for campaign {campaign.code} at {schedule_at}")
+
+    return {"status": "scheduled", "job_id": str(job.id)}
