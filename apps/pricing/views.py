@@ -327,6 +327,63 @@ def explain_price(request):
             variant_id, quantity, at_time, customer_context
         )
 
+        # Best Practice: Detailed Match Analysis for Price Books
+        checks = []
+        possible_entries = (
+            PriceBookEntry.objects.filter(
+                Q(variant=variant)
+                | Q(product=variant.product)
+                | Q(category=variant.product.category),
+                effective_from__lte=at_time,
+            )
+            .filter(Q(effective_to__gte=at_time) | Q(effective_to__isnull=True))
+            .select_related("price_book")
+        )
+
+        customer_currency = customer_context.get("currency", "EUR")
+        customer_country = customer_context.get("country", "")
+        customer_channel = customer_context.get("channel", "web")
+        customer_membership = customer_context.get("membership_tier", "retail")
+
+        for entry in possible_entries:
+            pb = entry.price_book
+            mismatches = []
+            if pb.currency != customer_currency:
+                mismatches.append(f"Currency ({pb.currency} != {customer_currency})")
+            if pb.country and pb.country != customer_country:
+                mismatches.append(f"Country ({pb.country} != {customer_country})")
+            if pb.channel and pb.channel != customer_channel:
+                mismatches.append(f"Channel ({pb.channel} != {customer_channel})")
+            if pb.customer_group and pb.customer_group != customer_membership:
+                mismatches.append(
+                    f"Group ({pb.customer_group} != {customer_membership})"
+                )
+
+            # Tier check
+            if entry.min_quantity > quantity:
+                mismatches.append(
+                    f"Quantity too low (Need {entry.min_quantity}, have {quantity})"
+                )
+            if entry.max_quantity and entry.max_quantity < quantity:
+                mismatches.append(
+                    f"Quantity too high (Max {entry.max_quantity}, have {quantity})"
+                )
+
+            checks.append(
+                {
+                    "code": pb.code,
+                    "name": pb.name,
+                    "price": float(entry.price),
+                    "is_eligible": len(mismatches) == 0,
+                    "mismatches": mismatches,
+                    "level": (
+                        "variant"
+                        if entry.variant
+                        else ("product" if entry.product else "category")
+                    ),
+                }
+            )
+
         explanation = {
             "variant": {
                 "id": str(variant.id),
@@ -335,7 +392,12 @@ def explain_price(request):
                 "tax_class": variant.tax_class,
             },
             "calculated_at": at_time.isoformat(),
-            "customer_context": customer_context,
+            "customer_context": {
+                "currency": customer_currency,
+                "country": customer_country,
+                "channel": customer_channel,
+                "membership_tier": customer_membership,
+            },
             "base_price_used": float(base_price),
             "tax_rate_used": float(tax_rate),
             "campaigns_considered": [
@@ -350,15 +412,7 @@ def explain_price(request):
                 }
                 for campaign in campaigns
             ],
-            # Revisit this query if needed, but it's okay for now
-            "price_books_checked": list(
-                PriceBookEntry.objects.filter(
-                    variant=variant,
-                    effective_from__lte=at_time,
-                )
-                .filter(Q(effective_to__gte=at_time) | Q(effective_to__isnull=True))
-                .values("price_book__code", "price_book__name", "price")
-            ),
+            "price_books_analysis": checks,
             "final_calculation": final_calculation,
         }
 

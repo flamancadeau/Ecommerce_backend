@@ -10,11 +10,17 @@ class IdempotencyKeySerializer(serializers.ModelSerializer):
     is_expired = serializers.BooleanField(read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
 
+    order_number = serializers.CharField(source="order.order_number", read_only=True)
+    key = serializers.CharField(required=False, allow_blank=True)
+    request_hash = serializers.CharField(required=False, allow_blank=True)
+
     class Meta:
         model = IdempotencyKey
         fields = [
             "id",
             "key",
+            "order",
+            "order_number",
             "request_hash",
             "response_code",
             "response_body",
@@ -24,9 +30,36 @@ class IdempotencyKeySerializer(serializers.ModelSerializer):
             "expires_at",
             "is_expired",
         ]
-        read_only_fields = ["id", "created_at", "is_expired", "status_display"]
+        read_only_fields = [
+            "id",
+            "order_number",
+            "created_at",
+            "is_expired",
+            "status_display",
+        ]
 
     def validate(self, data):
+        # Best Practice: Auto-calculate hash if not provided but body is
+        if not data.get("request_hash") and data.get("response_body"):
+            from apps.audit.services import IdempotencyService
+
+            # We use the response body as a proxy for the request if nothing else is provided
+            data["request_hash"] = IdempotencyService.get_request_hash(
+                data.get("response_body")
+            )
+
+        # Automatic Order Linking
+        if not data.get("order") and data.get("response_body"):
+            body = data.get("response_body")
+            order_num = body.get("order_id") or body.get("order_number")
+            if order_num:
+                from apps.orders.models import Order
+
+                try:
+                    order_obj = Order.objects.get(order_number=order_num)
+                    data["order"] = order_obj
+                except Order.DoesNotExist:
+                    pass
 
         if "expires_at" in data and data["expires_at"] <= timezone.now():
             raise serializers.ValidationError(
@@ -42,7 +75,12 @@ class IdempotencyKeySerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        """Create idempotency key with default expiration if not provided."""
+        """Standardize the creation of idempotency keys."""
+        if "key" not in validated_data:
+            from apps.audit.services import IdempotencyService
+
+            validated_data["key"] = IdempotencyService.generate_key()
+
         if "expires_at" not in validated_data:
             # Default expiration: 24 hours from now
             validated_data["expires_at"] = timezone.now() + timezone.timedelta(hours=24)

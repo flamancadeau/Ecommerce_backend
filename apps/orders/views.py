@@ -236,6 +236,19 @@ class CartViewSet(viewsets.ModelViewSet):
 class CheckoutViewSet(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
 
+    @swagger_auto_schema(
+        operation_description="Reserve inventory for items in a cart before placing an order.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["cart_id"],
+            properties={
+                "cart_id": openapi.Schema(
+                    type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID
+                ),
+            },
+        ),
+        responses={201: "Inventory Reserved", 400: "Validation Error"},
+    )
     @action(detail=False, methods=["post"], url_path="reserve")
     @transaction.atomic
     def reserve(self, request):
@@ -271,6 +284,35 @@ class CheckoutViewSet(viewsets.ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @swagger_auto_schema(
+        operation_description="Finalize checkout and place an order. Use either reservation_token or cart_id.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["email", "shipping_address"],
+            properties={
+                "reservation_token": openapi.Schema(
+                    type=openapi.TYPE_STRING, description="Token from /reserve/"
+                ),
+                "cart_id": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="Direct order from cart",
+                ),
+                "email": openapi.Schema(
+                    type=openapi.TYPE_STRING, format=openapi.FORMAT_EMAIL
+                ),
+                "shipping_address": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "street": openapi.Schema(type=openapi.TYPE_STRING),
+                        "city": openapi.Schema(type=openapi.TYPE_STRING),
+                        "country": openapi.Schema(type=openapi.TYPE_STRING),
+                    },
+                ),
+            },
+        ),
+        responses={201: OrderSerializer()},
+    )
     @action(detail=False, methods=["post"], url_path="place-order")
     @idempotent_request()
     def place_order(self, request):
@@ -336,6 +378,35 @@ class CheckoutViewSet(viewsets.ViewSet):
             )
 
     # Legacy endpoint support if needed, redirects to place_order logic
+    @swagger_auto_schema(
+        operation_description="Finalize checkout and place an order. Use either reservation_token or cart_id.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["email", "shipping_address"],
+            properties={
+                "reservation_token": openapi.Schema(
+                    type=openapi.TYPE_STRING, description="Token from /reserve/"
+                ),
+                "cart_id": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="Direct order from cart",
+                ),
+                "email": openapi.Schema(
+                    type=openapi.TYPE_STRING, format=openapi.FORMAT_EMAIL
+                ),
+                "shipping_address": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "street": openapi.Schema(type=openapi.TYPE_STRING),
+                        "city": openapi.Schema(type=openapi.TYPE_STRING),
+                        "country": openapi.Schema(type=openapi.TYPE_STRING),
+                    },
+                ),
+            },
+        ),
+        responses={201: OrderSerializer()},
+    )
     @action(detail=False, methods=["post"], url_path="create-order")
     def create_order(self, request):
         return self.place_order(request)

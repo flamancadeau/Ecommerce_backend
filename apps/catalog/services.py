@@ -10,7 +10,7 @@ class CatalogService:
         """
         Create a product and optionally its variants in one transaction.
         """
-        # Clean data: variants might be passed in variants_data or stay in product_data
+
         product_data = product_data.copy()
         variants = variants_data or product_data.pop("variants", None)
 

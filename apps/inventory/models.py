@@ -181,6 +181,7 @@ class InboundItem(models.Model):
     unit_cost = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
+    received_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)
 
     class Meta:

@@ -11,6 +11,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 class Channel(models.TextChoices):
     WEB = "web", "Web"
     APP = "app", "Mobile App"
+    MOBILE = "mobile", "Mobile"
     MARKETPLACE = "marketplace", "Marketplace"
     RETAIL = "retail", "Retail Store"
     WHOLESALE = "wholesale", "Wholesale"

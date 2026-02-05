@@ -190,7 +190,6 @@ class Reservation(models.Model):
 
     reservation_token = models.CharField(
         max_length=100,
-        unique=True,
         db_index=True,
         default=generate_reservation_token,
         editable=False,

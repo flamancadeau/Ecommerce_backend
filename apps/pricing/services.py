@@ -16,7 +16,9 @@ class PricingService:
         """
         variant = get_object_or_404(Variant, id=variant_id)
 
-        base_price = PricingService.get_base_price(variant, customer_context, at_time)
+        base_price = PricingService.get_base_price(
+            variant, customer_context, at_time, quantity
+        )
 
         applicable_campaigns = PricingService.get_applicable_campaigns(
             variant=variant,
@@ -95,7 +97,7 @@ class PricingService:
 
         availability = InventoryService.check_availability(variant, quantity)
         price_book_info = PricingService.get_price_book_info(
-            variant, customer_context, at_time
+            variant, customer_context, at_time, quantity
         )
 
         return {
@@ -118,7 +120,7 @@ class PricingService:
         }
 
     @staticmethod
-    def get_base_price(variant, customer_context, at_time):
+    def get_base_price(variant, customer_context, at_time, quantity=1):
         """
         Get base price from price book or variant using Repository.
         """
@@ -128,7 +130,7 @@ class PricingService:
         customer_group = customer_context.get("membership_tier", "retail")
 
         price_entry = PricingRepository.get_price_entry(
-            variant, currency, country, channel, customer_group
+            variant, currency, country, channel, customer_group, quantity
         )
 
         if price_entry:
@@ -273,15 +275,26 @@ class PricingService:
         return tax_rate.rate if tax_rate else Decimal("0.19")
 
     @staticmethod
-    def get_price_book_info(variant, customer_context, at_time):
+    def get_price_book_info(variant, customer_context, at_time, quantity=1):
         """Get price book info using Repository."""
         currency = customer_context.get("currency", "EUR")
-        price_entry = PricingRepository.get_price_book_info(variant.id, currency)
+        country = customer_context.get("country", "")
+        channel = customer_context.get("channel", "web")
+        customer_group = customer_context.get("membership_tier", "retail")
+
+        price_entry = PricingRepository.get_price_book_info(
+            variant, currency, country, channel, customer_group, quantity
+        )
 
         if price_entry:
             return {
                 "price_book": price_entry.price_book.code,
                 "price_book_name": price_entry.price_book.name,
                 "price": float(price_entry.price),
+                "applied_at": (
+                    "variant"
+                    if price_entry.variant
+                    else ("product" if price_entry.product else "category")
+                ),
             }
         return None

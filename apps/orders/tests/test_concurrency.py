@@ -36,12 +36,23 @@ def test_concurrent_reservations():
     results = []
 
     def attempt_reserve(cart_id):
-        connections.close_all()  # Ensure new connection for thread
-        try:
-            OrderService.create_reservation(cart_id)
-            results.append(True)
-        except Exception as e:
-            results.append(False)
+        import time
+        from django.db import connections
+
+        for attempt in range(10):
+            connections.close_all()
+            try:
+                OrderService.create_reservation(cart_id)
+                results.append(True)
+                return
+            except Exception as e:
+                # If using SQLite, we often get table locks. Retry.
+                if "locked" in str(e).lower():
+                    time.sleep(0.05)
+                    continue
+                results.append(False)
+                return
+        results.append(False)
 
     # 3. Spawn threads
     threads = []

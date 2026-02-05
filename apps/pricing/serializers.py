@@ -21,6 +21,29 @@ class PriceBookSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at", "code"]
 
+    def validate(self, attrs):
+        """Custom validation to provide a helpful error message for duplicate context."""
+        country = attrs.get("country", "")
+        channel = attrs.get("channel", "")
+        customer_group = attrs.get("customer_group", "")
+
+        # Check for unique_together constraint manually to provide a better error
+        qs = PriceBook.objects.filter(
+            country=country, channel=channel, customer_group=customer_group
+        )
+
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+
+        existing = qs.first()
+        if existing:
+            raise serializers.ValidationError(
+                {
+                    "non_field_errors": f"A Price Book with this context (Country: {country}, Channel: {channel}, Group: {customer_group}) already exists. Please update the existing Price Book (ID: {existing.id}) or use a different combination."
+                }
+            )
+        return attrs
+
 
 class PriceBookEntrySerializer(serializers.ModelSerializer):
     class Meta:
@@ -57,6 +80,18 @@ class PriceBookEntrySerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "Only one of 'variant', 'product' or 'category' may be set."
             )
+
+        # Best Practice Check: Max Quantity must be >= Min Quantity
+        min_q = attrs.get("min_quantity", 1)
+        max_q = attrs.get("max_quantity")
+
+        if max_q is not None and max_q < min_q:
+            raise serializers.ValidationError(
+                {
+                    "max_quantity": f"Max quantity ({max_q}) cannot be less than Min quantity ({min_q})."
+                }
+            )
+
         return attrs
 
 

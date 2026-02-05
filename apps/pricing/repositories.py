@@ -5,23 +5,44 @@ from .models import PriceBook, PriceBookEntry, TaxRate
 
 class PricingRepository:
     @staticmethod
-    def get_price_entry(variant, currency, country, channel, customer_group):
-        """Finds the most specific price entry valid right now."""
+    def get_price_entry(
+        variant, currency, country, channel, customer_group, quantity=1
+    ):
+        """Finds the most specific price entry, falling back to 'Default' if needed."""
         now = timezone.now()
-        return (
+
+        # 1. Try to find an exact match for the customer context
+        query_base = (
             PriceBookEntry.objects.filter(
                 Q(variant=variant)
                 | Q(product=variant.product)
                 | Q(category=variant.product.category),
                 price_book__currency=currency,
+                price_book__is_active=True,
+                min_quantity__lte=quantity,
+            )
+            .filter(Q(max_quantity__isnull=True) | Q(max_quantity__gte=quantity))
+            .filter(Q(effective_from__isnull=True) | Q(effective_from__lte=now))
+            .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=now))
+        )
+
+        entry = (
+            query_base.filter(
                 price_book__country=country,
                 price_book__channel=channel,
                 price_book__customer_group=customer_group,
-                price_book__is_active=True,
             )
-            .filter(Q(effective_from__isnull=True) | Q(effective_from__lte=now))
-            .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=now))
-            .order_by("variant", "product", "category")
+            .order_by("variant", "product", "category", "-min_quantity")
+            .first()
+        )
+
+        if entry:
+            return entry
+
+        # 2. Fallback to the 'Default' Price Book for this currency
+        return (
+            query_base.filter(price_book__is_default=True)
+            .order_by("variant", "product", "category", "-min_quantity")
             .first()
         )
 
@@ -41,14 +62,42 @@ class PricingRepository:
         )
 
     @staticmethod
-    def get_price_book_info(variant_id, currency):
-        """Simple lookup for price book metadata."""
+    def get_price_book_info(
+        variant, currency, country, channel, customer_group, quantity=1
+    ):
+        """Finds metadata of the used price book, falling back to 'Default' if needed."""
         now = timezone.now()
-        return (
+
+        query_base = (
             PriceBookEntry.objects.filter(
-                variant_id=variant_id, price_book__currency=currency
+                Q(variant=variant)
+                | Q(product=variant.product)
+                | Q(category=variant.product.category),
+                price_book__currency=currency,
+                price_book__is_active=True,
+                min_quantity__lte=quantity,
             )
+            .filter(Q(max_quantity__isnull=True) | Q(max_quantity__gte=quantity))
             .filter(Q(effective_from__isnull=True) | Q(effective_from__lte=now))
             .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=now))
+        )
+
+        entry = (
+            query_base.filter(
+                price_book__country=country,
+                price_book__channel=channel,
+                price_book__customer_group=customer_group,
+            )
+            .order_by("variant", "product", "category", "-min_quantity")
+            .first()
+        )
+
+        if entry:
+            return entry
+
+        # Fallback to the 'Default' Price Book for this currency
+        return (
+            query_base.filter(price_book__is_default=True)
+            .order_by("variant", "product", "category", "-min_quantity")
             .first()
         )

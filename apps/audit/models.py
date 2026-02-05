@@ -130,6 +130,15 @@ class IdempotencyKey(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(null=True, blank=True)
 
+    # Relationship to Order (Optional)
+    order = models.ForeignKey(
+        "orders.Order",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="idempotency_keys",
+    )
+
     class Meta:
         ordering = ["-created_at"]
         indexes = [
