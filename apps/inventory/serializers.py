@@ -52,6 +52,14 @@ class StockSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        read_only_fields = [
+            "id",
+            "on_hand",
+            "reserved",
+            "available",
+            "created_at",
+            "updated_at",
+        ]
 
     def validate(self, data):
         instance = getattr(self, "instance", None)
@@ -136,6 +144,12 @@ class InboundItemSerializer(serializers.ModelSerializer):
             "received_quantity",
             "unit_cost",
             "notes",
+            "remaining_quantity",
+            "is_fully_received",
+        ]
+        read_only_fields = [
+            "id",
+            "received_quantity",
             "remaining_quantity",
             "is_fully_received",
         ]

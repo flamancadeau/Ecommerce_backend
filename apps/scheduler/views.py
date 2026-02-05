@@ -1,31 +1,27 @@
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
-from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.db import transaction
-from datetime import timedelta
-import hashlib
-import json
 import logging
 
-from .models import IdempotencyKey, ScheduledJob
+from .models import ScheduledJob
+from apps.audit.models import IdempotencyKey
+from apps.audit.services import IdempotencyService
 from .serializers import (
     IdempotencyKeySerializer,
     ScheduledJobSerializer,
     CreateScheduledJobSerializer,
     IdempotencyRequestSerializer,
 )
-from .tasks import execute_scheduled_job
+from .services import SchedulerService
 
 logger = logging.getLogger(__name__)
 
 
 class IdempotencyKeyViewSet(viewsets.ModelViewSet):
-
     queryset = IdempotencyKey.objects.all()
     serializer_class = IdempotencyKeySerializer
     permission_classes = [IsAuthenticated]
@@ -40,158 +36,64 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
     ordering = ["-created_at"]
 
     def get_queryset(self):
-        """Filter queryset based on user permissions."""
         queryset = super().get_queryset()
-
         if not self.request.user.is_staff:
-
             return queryset.none()
-
         return queryset
 
     @action(detail=True, methods=["post"])
     def complete(self, request, pk=None):
-        """Mark an idempotency key as completed with a response."""
         key = self.get_object()
-
-        if key.status != "processing":
+        if key.status != IdempotencyKey.Status.PROCESSING:
             return Response(
-                {
-                    "status": False,
-                    "message": f"Key is already {key.status}",
-                    "data": {},
-                },
+                {"status": False, "message": f"Key is already {key.status}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        response_data = request.data.get("response")
-
-        key.response = response_data
-        key.status = "completed"
-        key.save()
-
-        logger.info(f"Idempotency key {key.key[:20]}... marked as completed")
-
+        IdempotencyService.complete_key(key, 200, request.data.get("response"))
         return Response(
             {
                 "status": True,
-                "message": "Idempotency key completed successfully",
+                "message": "Key completed",
                 "data": IdempotencyKeySerializer(key).data,
             }
         )
 
     @action(detail=True, methods=["post"])
     def fail(self, request, pk=None):
-        """Mark an idempotency key as failed."""
         key = self.get_object()
-
-        if key.status != "processing":
-            return Response(
-                {
-                    "status": False,
-                    "message": f"Key is already {key.status}",
-                    "data": {},
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        error_message = request.data.get("error", "Unknown error")
-
-        key.status = "failed"
-        key.save()
-
-        logger.warning(
-            f"Idempotency key {key.key[:20]}... marked as failed: {error_message}"
-        )
-
-        return Response(
-            {
-                "status": True,
-                "message": "Idempotency key marked as failed",
-                "data": IdempotencyKeySerializer(key).data,
-            }
-        )
+        IdempotencyService.mark_failed(key)
+        return Response({"status": True, "message": "Key marked as failed"})
 
     @action(detail=False, methods=["post"])
     def verify(self, request):
-        """Verify if a request can be processed idempotently."""
         serializer = IdempotencyRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        key_value = serializer.validated_data["key"]
-        expires_in_hours = serializer.validated_data["expires_in_hours"]
+        key_val = serializer.validated_data["key"]
+        expires_hrs = serializer.validated_data["expires_in_hours"]
 
-        request_body = json.dumps(request.data, sort_keys=True)
-        request_hash = hashlib.sha256(request_body.encode()).hexdigest()
-
-        existing_key = IdempotencyKey.objects.filter(key=key_value).first()
-
-        if existing_key:
-            if existing_key.status == "completed":
-
-                return Response(
-                    {
-                        "status": True,
-                        "message": "Request already processed",
-                        "data": {
-                            "idempotent": True,
-                            "status": "completed",
-                            "response": existing_key.response,
-                        },
-                    }
-                )
-            elif existing_key.status == "processing":
-
-                return Response(
-                    {
-                        "status": True,
-                        "message": "Request is being processed",
-                        "data": {"idempotent": True, "status": "processing"},
-                    },
-                    status=status.HTTP_202_ACCEPTED,
-                )
-            elif existing_key.status == "failed":
-
-                existing_key.status = "processing"
-                existing_key.save()
-
-                return Response(
-                    {
-                        "status": True,
-                        "message": "Retrying previously failed request",
-                        "data": {
-                            "idempotent": True,
-                            "status": "retrying",
-                            "key_id": str(existing_key.id),
-                        },
-                    }
-                )
-
-        new_key = IdempotencyKey.objects.create(
-            key=key_value,
-            request_hash=request_hash,
-            status="processing",
-            expires_at=timezone.now() + timedelta(hours=expires_in_hours),
+        idem_key, created = IdempotencyService.verify_or_create(
+            key=key_val,
+            request_path=request.path,
+            request_data=request.data,
+            expires_in_hours=expires_hrs,
         )
-
-        logger.info(f"Created new idempotency key: {key_value[:20]}...")
 
         return Response(
             {
                 "status": True,
-                "message": "New idempotency key created",
                 "data": {
                     "idempotent": True,
-                    "status": "processing",
-                    "key_id": str(new_key.id),
-                    "expires_at": new_key.expires_at.isoformat(),
+                    "status": idem_key.status,
+                    "key_id": str(idem_key.id),
+                    "created": created,
                 },
             }
         )
 
 
 class ScheduledJobViewSet(viewsets.ModelViewSet):
-
     queryset = ScheduledJob.objects.all()
     permission_classes = [IsAuthenticated]
     filter_backends = [
@@ -205,348 +107,113 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
     ordering = ["scheduled_at"]
 
     def get_serializer_class(self):
-        """Use different serializer for creation vs retrieval."""
         if self.action == "create":
             return CreateScheduledJobSerializer
         return ScheduledJobSerializer
 
-    def get_queryset(self):
-        """Filter queryset based on user permissions."""
-        queryset = super().get_queryset()
-
-        if not self.request.user.is_staff:
-
-            queryset = queryset.filter(job_type="report_generation")
-
-        return queryset
-
     def perform_create(self, serializer):
-
-        job = serializer.save()
-
-        logger.info(f"Scheduled job created: {job.job_type} at {job.scheduled_at}")
-
-        execute_scheduled_job.apply_async(args=[str(job.id)], eta=job.scheduled_at)
+        SchedulerService.create_job(
+            job_type=serializer.validated_data["job_type"],
+            scheduled_at=serializer.validated_data["scheduled_at"],
+            payload=serializer.validated_data.get("payload"),
+        )
 
     @action(detail=True, methods=["post"])
     def execute_now(self, request, pk=None):
-
         job = self.get_object()
-
-        if job.status not in ["pending", "failed"]:
-            return Response(
-                {
-                    "status": False,
-                    "message": f"Job is already {job.status}",
-                    "data": {},
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        execute_scheduled_job.delay(str(job.id))
-
-        return Response(
-            {
-                "status": True,
-                "message": "Job execution started",
-                "data": {
-                    "job_id": str(job.id),
-                    "job_type": job.job_type,
-                    "scheduled_at": job.scheduled_at.isoformat(),
-                },
-            }
-        )
+        try:
+            SchedulerService.execute_now(job)
+            return Response({"status": True, "message": "Job execution started"})
+        except ValueError as e:
+            return Response({"status": False, "message": str(e)}, status=400)
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
-
         job = self.get_object()
-
-        if job.status not in ["pending", "running"]:
-            return Response(
-                {
-                    "status": False,
-                    "message": f"Cannot cancel job with status: {job.status}",
-                    "data": {},
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        job.status = "cancelled"
-        job.save()
-
-        logger.info(f"Cancelled scheduled job: {job.job_type}")
-
-        return Response(
-            {
-                "status": True,
-                "message": "Job cancelled successfully",
-                "data": ScheduledJobSerializer(job).data,
-            }
-        )
+        try:
+            SchedulerService.cancel_job(job)
+            return Response({"status": True, "message": "Job cancelled"})
+        except ValueError as e:
+            return Response({"status": False, "message": str(e)}, status=400)
 
     @action(detail=True, methods=["post"])
     def retry(self, request, pk=None):
-
         job = self.get_object()
-
-        if job.status != "failed":
-            return Response(
-                {
-                    "status": False,
-                    "message": f"Can only retry failed jobs (current: {job.status})",
-                    "data": {},
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if not job.should_retry():
-            return Response(
-                {
-                    "status": False,
-                    "message": f"Maximum retries ({job.max_retries}) exceeded",
-                    "data": {},
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        job.status = "pending"
-        job.scheduled_at = timezone.now()
-        job.save()
-
-        execute_scheduled_job.delay(str(job.id))
-
-        return Response(
-            {
-                "status": True,
-                "message": "Job retry scheduled",
-                "data": ScheduledJobSerializer(job).data,
-            }
-        )
+        try:
+            SchedulerService.retry_job(job)
+            return Response({"status": True, "message": "Job retry scheduled"})
+        except ValueError as e:
+            return Response({"status": False, "message": str(e)}, status=400)
 
     @action(detail=False, methods=["get"])
     def overdue(self, request):
-        """Get all overdue scheduled jobs."""
-        overdue_jobs = ScheduledJob.objects.filter(
-            status="pending", scheduled_at__lt=timezone.now()
+        now = timezone.now()
+        queryset = self.get_queryset().filter(
+            status=ScheduledJob.Status.PENDING, scheduled_at__lt=now
         )
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
 
-        serializer = ScheduledJobSerializer(overdue_jobs, many=True)
-
-        return Response(
-            {
-                "status": True,
-                "message": f"Found {overdue_jobs.count()} overdue jobs",
-                "data": serializer.data,
-            }
-        )
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     @action(detail=False, methods=["post"])
     def schedule_campaign_activation(self, request):
-        """Schedule a campaign activation job."""
-        from apps.promotions.models import Campaign
-
         campaign_id = request.data.get("campaign_id")
         activate_at = request.data.get("activate_at")
-
-        if not campaign_id or not activate_at:
-            return Response(
-                {
-                    "status": False,
-                    "message": "campaign_id and activate_at are required",
-                    "data": {},
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         try:
-            campaign = Campaign.objects.get(id=campaign_id)
-            activate_time = timezone.datetime.fromisoformat(
-                activate_at.replace("Z", "+00:00")
+            job = SchedulerService.schedule_campaign_activation(
+                campaign_id, activate_at
             )
-
-            if activate_time <= timezone.now():
-                return Response(
-                    {
-                        "status": False,
-                        "message": "Activation time must be in the future",
-                        "data": {},
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            job = ScheduledJob.objects.create(
-                job_type="campaign_activation",
-                scheduled_at=activate_time,
-                status="pending",
-                payload={
-                    "campaign_id": str(campaign.id),
-                    "campaign_code": campaign.code,
-                    "action": "activate",
-                },
-            )
-
-            execute_scheduled_job.apply_async(args=[str(job.id)], eta=activate_time)
-
-            logger.info(
-                f"Scheduled campaign activation: {campaign.code} at {activate_time}"
-            )
-
-            return Response(
-                {
-                    "status": True,
-                    "message": "Campaign activation scheduled",
-                    "data": ScheduledJobSerializer(job).data,
-                }
-            )
-
-        except Campaign.DoesNotExist:
-            return Response(
-                {"status": False, "message": "Campaign not found", "data": {}},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        except ValueError:
-            return Response(
-                {
-                    "status": False,
-                    "message": "Invalid date format. Use ISO format (e.g., 2024-01-30T10:00:00Z)",
-                    "data": {},
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"status": True, "data": ScheduledJobSerializer(job).data})
+        except Exception as e:
+            return Response({"status": False, "message": str(e)}, status=400)
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def system_status(request):
-    """Get system status including background job statistics."""
     now = timezone.now()
-
-    total_jobs = ScheduledJob.objects.count()
-    pending_jobs = ScheduledJob.objects.filter(status="pending").count()
-    overdue_jobs = ScheduledJob.objects.filter(
-        status="pending", scheduled_at__lt=now
-    ).count()
-    failed_jobs = ScheduledJob.objects.filter(status="failed").count()
-
-    total_keys = IdempotencyKey.objects.count()
-    active_keys = IdempotencyKey.objects.filter(
-        status="processing", expires_at__gt=now
-    ).count()
-    expired_keys = IdempotencyKey.objects.filter(expires_at__lte=now).count()
-
     return Response(
         {
             "status": True,
-            "message": "System status retrieved",
             "data": {
                 "jobs": {
-                    "total": total_jobs,
-                    "pending": pending_jobs,
-                    "overdue": overdue_jobs,
-                    "failed": failed_jobs,
-                },
-                "idempotency_keys": {
-                    "total": total_keys,
-                    "active": active_keys,
-                    "expired": expired_keys,
+                    "total": ScheduledJob.objects.count(),
+                    "pending": ScheduledJob.objects.filter(status="pending").count(),
                 },
                 "timestamp": now.isoformat(),
-                "uptime": "System is running",
             },
         }
     )
 
 
 class IdempotencyMiddlewareView(APIView):
+    """Refactored to use central service."""
 
     permission_classes = [IsAuthenticated]
 
     def process_request(self, request, business_logic_function):
+        key = request.headers.get("X-Idempotency-Key")
+        if not key:
+            return Response(business_logic_function())
 
-        idempotency_key = request.headers.get("X-Idempotency-Key")
-
-        if not idempotency_key:
-
-            try:
-                result = business_logic_function()
-                return Response(result)
-            except Exception as e:
-                return Response(
-                    {"status": False, "message": str(e), "data": {}},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-
-        request_body = (
-            json.dumps(request.data, sort_keys=True) if request.data else "{}"
+        idem_key, created = IdempotencyService.verify_or_create(
+            key=key, request_path=request.path, request_data=request.data
         )
-        request_hash = hashlib.sha256(request_body.encode()).hexdigest()
 
-        with transaction.atomic():
+        if not created:
+            if idem_key.status == IdempotencyKey.Status.COMPLETED:
+                return Response(idem_key.response_body)
+            if idem_key.status == IdempotencyKey.Status.PROCESSING:
+                return Response({"status": False, "message": "Processing"}, status=409)
 
-            existing_key = (
-                IdempotencyKey.objects.filter(key=idempotency_key)
-                .select_for_update()
-                .first()
-            )
-
-            if existing_key:
-                if existing_key.status == "completed":
-
-                    return Response(existing_key.response)
-                elif existing_key.status == "processing":
-
-                    return Response(
-                        {
-                            "status": False,
-                            "message": "Request is still being processed",
-                            "data": {},
-                        },
-                        status=status.HTTP_409_CONFLICT,
-                    )
-                elif existing_key.status == "failed":
-
-                    existing_key.status = "processing"
-                    existing_key.save()
-                else:
-
-                    return Response(
-                        {
-                            "status": False,
-                            "message": f"Idempotency key in invalid state: {existing_key.status}",
-                            "data": {},
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-            else:
-
-                existing_key = IdempotencyKey.objects.create(
-                    key=idempotency_key,
-                    request_hash=request_hash,
-                    status="processing",
-                    expires_at=timezone.now() + timedelta(hours=24),
-                )
-
-            try:
-
-                result = business_logic_function()
-
-                existing_key.response = result
-                existing_key.status = "completed"
-                existing_key.save()
-
-                return Response(result)
-
-            except Exception as e:
-
-                existing_key.status = "failed"
-                existing_key.save()
-
-                logger.error(
-                    f"Idempotent request failed: {idempotency_key[:20]}... - {str(e)}"
-                )
-
-                return Response(
-                    {"status": False, "message": str(e), "data": {}},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
+        try:
+            result = business_logic_function()
+            IdempotencyService.complete_key(idem_key, 200, result)
+            return Response(result)
+        except Exception as e:
+            IdempotencyService.mark_failed(idem_key)
+            return Response({"status": False, "message": str(e)}, status=500)

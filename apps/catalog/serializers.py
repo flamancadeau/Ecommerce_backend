@@ -17,6 +17,7 @@ class VariantSerializer(serializers.ModelSerializer):
             "id",
             "product",
             "sku",
+            "status",
             "attributes",
             "base_price",
             "compare_at_price",
@@ -47,6 +48,7 @@ class VariantSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
 
         instance.sku = validated_data.get("sku", instance.sku)
+        instance.status = validated_data.get("status", instance.status)
         instance.attributes = validated_data.get("attributes", instance.attributes)
         instance.base_price = validated_data.get("base_price", instance.base_price)
         instance.compare_at_price = validated_data.get(

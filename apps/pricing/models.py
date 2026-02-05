@@ -1,29 +1,30 @@
 import uuid
 import random
 import string
+from decimal import Decimal
+
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
-from decimal import Decimal
+
+
+class Channel(models.TextChoices):
+    WEB = "web", "Web"
+    APP = "app", "Mobile App"
+    MARKETPLACE = "marketplace", "Marketplace"
+    RETAIL = "retail", "Retail Store"
+    WHOLESALE = "wholesale", "Wholesale"
+
+
+class CustomerGroup(models.TextChoices):
+    RETAIL = "retail", "Retail"
+    WHOLESALE = "wholesale", "Wholesale"
+    VIP = "vip", "VIP"
+    EMPLOYEE = "employee", "Employee"
+    B2B = "b2b", "B2B"
 
 
 class PriceBook(models.Model):
-
-    CHANNEL_CHOICES = [
-        ("web", "Web"),
-        ("app", "Mobile App"),
-        ("marketplace", "Marketplace"),
-        ("retail", "Retail Store"),
-        ("wholesale", "Wholesale"),
-    ]
-
-    CUSTOMER_GROUP_CHOICES = [
-        ("retail", "Retail"),
-        ("wholesale", "Wholesale"),
-        ("vip", "VIP"),
-        ("employee", "Employee"),
-        ("b2b", "B2B"),
-    ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
@@ -31,10 +32,19 @@ class PriceBook(models.Model):
     description = models.TextField(blank=True)
     currency = models.CharField(max_length=3, default="EUR")
     country = models.CharField(max_length=2, blank=True, help_text="ISO country code")
-    channel = models.CharField(max_length=50, choices=CHANNEL_CHOICES, blank=True)
-    customer_group = models.CharField(
-        max_length=50, choices=CUSTOMER_GROUP_CHOICES, blank=True
+
+    channel = models.CharField(
+        max_length=50,
+        choices=Channel.choices,
+        blank=True,
     )
+
+    customer_group = models.CharField(
+        max_length=50,
+        choices=CustomerGroup.choices,
+        blank=True,
+    )
+
     is_active = models.BooleanField(default=True)
     is_default = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -59,13 +69,9 @@ class PriceBook(models.Model):
         super().save(*args, **kwargs)
 
     def generate_code(self):
-
         prefix = "PB"
-
         channel_code = self.channel.upper() if self.channel else "GEN"
-
         country_code = self.country.upper() if self.country else "XX"
-
         customer_group_code = (
             self.customer_group.upper() if self.customer_group else "GEN"
         )
@@ -100,18 +106,29 @@ class PriceBookEntry(models.Model):
     category = models.ForeignKey(
         "catalog.Category", on_delete=models.CASCADE, null=True, blank=True
     )
+
     price = models.DecimalField(
-        max_digits=10, decimal_places=2, validators=[MinValueValidator(0)]
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(0)],
     )
     compare_at_price = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
+
     effective_from = models.DateTimeField(null=True, blank=True)
     effective_to = models.DateTimeField(null=True, blank=True)
-    min_quantity = models.IntegerField(default=1, validators=[MinValueValidator(1)])
-    max_quantity = models.IntegerField(
-        null=True, blank=True, validators=[MinValueValidator(1)]
+
+    min_quantity = models.IntegerField(
+        default=1,
+        validators=[MinValueValidator(1)],
     )
+    max_quantity = models.IntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1)],
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -147,8 +164,8 @@ class PriceBookEntry(models.Model):
         return True
 
     def clean(self):
+        provided = sum(bool(x) for x in (self.variant, self.product, self.category))
 
-        provided = sum([bool(self.variant), bool(self.product), bool(self.category)])
         if provided == 0:
             raise ValidationError(
                 "One of 'variant', 'product' or 'category' must be set."
@@ -164,16 +181,20 @@ class TaxRate(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     country = models.CharField(max_length=2)
     state = models.CharField(max_length=50, blank=True)
+
     rate = models.DecimalField(
         max_digits=5,
         decimal_places=3,
         validators=[MinValueValidator(0), MaxValueValidator(1)],
     )
+
     tax_class = models.CharField(max_length=50, default="standard")
     description = models.CharField(max_length=200, blank=True)
+
     is_active = models.BooleanField(default=True)
     effective_from = models.DateField()
     effective_to = models.DateField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

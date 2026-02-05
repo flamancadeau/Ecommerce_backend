@@ -57,12 +57,19 @@ class Product(SafeDeleteModel):
 
 
 class Variant(SafeDeleteModel):
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        DISCONTINUED = "discontinued", "Discontinued"
+        OUT_OF_SEASON = "out_of_season", "Out of Season"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name="variants"
     )
     sku = models.CharField(max_length=100, unique=True, db_index=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.ACTIVE
+    )
     attributes = models.JSONField(default=dict, help_text="Color, size, material etc.")
     base_price = models.DecimalField(
         max_digits=10, decimal_places=2, validators=[MinValueValidator(0)]

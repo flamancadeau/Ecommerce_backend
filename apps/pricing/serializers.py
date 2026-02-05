@@ -103,3 +103,14 @@ class PriceQuoteRequestSerializer(serializers.Serializer):
 
 class ExplainPriceQuerySerializer(serializers.Serializer):
     variant_id = serializers.UUIDField(help_text="UUID of the variant")
+    quantity = serializers.IntegerField(
+        required=False, default=1, help_text="Quantity to calculate for"
+    )
+    at = serializers.DateTimeField(
+        required=False, help_text="ISO timestamp for price-as-of-time"
+    )
+    context = serializers.CharField(
+        required=False,
+        default="{}",
+        help_text="JSON string of customer context (currency, country, etc.)",
+    )

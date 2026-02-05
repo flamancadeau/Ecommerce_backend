@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.utils import timezone
 from apps.catalog.models import Product, Variant
 from apps.promotions.models import Campaign, CampaignDiscount
-from apps.pricing.views import calculate_item_price
+from apps.pricing.services import PricingService
 
 pytestmark = pytest.mark.django_db
 
@@ -91,7 +91,7 @@ class TestPricingStacking:
             campaign=camp_a, discount_type="percentage", value=Decimal("10.00")
         )
 
-        result = calculate_item_price(
+        result = PricingService.calculate_item_price(
             variant_id=variant.id, quantity=1, at_time=now, customer_context={}
         )
 
@@ -135,7 +135,7 @@ class TestPricingStacking:
             campaign=camp_b, discount_type="percentage", value=Decimal("20.00")
         )
 
-        result = calculate_item_price(
+        result = PricingService.calculate_item_price(
             variant_id=variant.id, quantity=1, at_time=now, customer_context={}
         )
 

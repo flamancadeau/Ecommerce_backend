@@ -28,33 +28,18 @@ class CampaignViewSet(viewsets.ModelViewSet):
 
     @idempotent_request()
     def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
+        from .services import PromotionsService
 
-    @idempotent_request()
-    def update(self, request, *args, **kwargs):
-        return super().update(request, *args, **kwargs)
-
-    @idempotent_request()
-    def partial_update(self, request, *args, **kwargs):
-        return super().partial_update(request, *args, **kwargs)
-
-    def perform_create(self, serializer):
-        instance = serializer.save()
-        CampaignAudit.objects.create(
-            campaign=instance,
-            changed_field="all",
-            new_value="Campaign created",
-            reason="Initial creation",
-        )
-
-    def perform_update(self, serializer):
-        instance = serializer.save()
-        CampaignAudit.objects.create(
-            campaign=instance,
-            changed_field="multiple",
-            new_value="Campaign updated",
-            reason="Updates applied",
-        )
+        try:
+            campaign = PromotionsService.create_campaign(
+                campaign_data=request.data,
+                rules_data=request.data.get("rules"),
+                discounts_data=request.data.get("discounts"),
+            )
+            serializer = self.get_serializer(campaign)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -72,17 +57,18 @@ class CampaignViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["patch"], url_path="status")
     def change_status(self, request, pk=None):
-        campaign = self.get_object()
-        campaign.is_active = request.data.get("is_active", True)
-        campaign.save(update_fields=["is_active"])
+        from .services import PromotionsService
+
+        is_active = request.data.get("is_active", True)
+        campaign = PromotionsService.toggle_campaign_status(pk, is_active)
         return Response(self.get_serializer(campaign).data)
 
     @action(detail=True, methods=["post"], url_path="filters")
     def add_filter(self, request, pk=None):
-        campaign = self.get_object()
-        serializer = CampaignRuleSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save(campaign=campaign)
+        from .services import PromotionsService
+
+        rule = PromotionsService.add_rule_to_campaign(pk, request.data)
+        serializer = CampaignRuleSerializer(rule)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(

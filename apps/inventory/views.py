@@ -10,6 +10,8 @@ from django.db.models import Sum
 from apps.audit.models import InventoryAudit
 from apps.audit.idempotency import idempotent_request
 from apps.catalog.models import Variant
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 from .serializers import (
     WarehouseSerializer,
     StockSerializer,
@@ -174,7 +176,6 @@ class StockViewSet(_BaseViewSet):
 
     @action(detail=False, methods=["post"], url_path="adjust")
     @idempotent_request()
-    @transaction.atomic
     def adjust(self, request):
         """Manual adjustment of stock."""
         variant_id = request.data.get("variant")
@@ -188,25 +189,17 @@ class StockViewSet(_BaseViewSet):
                 status=400,
             )
 
-        stock, created = Stock.objects.select_for_update().get_or_create(
-            variant_id=variant_id, warehouse_id=warehouse_id
-        )
+        # Basic adjustment logic could also be in service, but let's focus on complex ones first.
+        # Actually, let's move it to service for consistency.
+        from .services import InventoryService
 
-        old_qty = stock.on_hand
-        stock.on_hand += quantity
-        stock.save()
-
-        InventoryAudit.objects.create(
-            event_type="adjustment",
-            variant_id=variant_id,
-            warehouse_id=warehouse_id,
-            quantity=quantity,
-            from_quantity=old_qty,
-            to_quantity=stock.on_hand,
-            notes=reason,
-        )
-
-        return Response({"success": True, "data": StockSerializer(stock).data})
+        try:
+            stock = InventoryService.adjust_stock(
+                variant_id, warehouse_id, quantity, reason
+            )
+            return Response({"success": True, "data": StockSerializer(stock).data})
+        except Exception as e:
+            return Response({"success": False, "message": str(e)}, status=400)
 
     @action(
         detail=False, methods=["get"], url_path="variant-status/(?P<variant_id>[^/.]+)"
@@ -229,20 +222,35 @@ class StockViewSet(_BaseViewSet):
         }
         return Response({"success": True, "data": data})
 
+    @swagger_auto_schema(
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "variant": openapi.Schema(
+                    type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID
+                ),
+                "warehouse": openapi.Schema(
+                    type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID
+                ),
+                "backorderable": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                "backorder_limit": openapi.Schema(type=openapi.TYPE_INTEGER),
+                "safety_stock": openapi.Schema(type=openapi.TYPE_INTEGER),
+            },
+            required=["variant", "warehouse"],
+        )
+    )
     def create(self, request, *args, **kwargs):
-
+        # Override to handle upsert-like behavior if variant/warehouse combo exists
         variant_id = request.data.get("variant")
         warehouse_id = request.data.get("warehouse")
 
         if variant_id and warehouse_id:
-            try:
-
-                existing_stock = Stock.objects.get(
-                    variant_id=variant_id, warehouse_id=warehouse_id
-                )
-
+            existing_stock = Stock.objects.filter(
+                variant_id=variant_id, warehouse_id=warehouse_id
+            ).first()
+            if existing_stock:
                 serializer = self.get_serializer(
-                    existing_stock, data=request.data, partial=False
+                    existing_stock, data=request.data, partial=True
                 )
                 serializer.is_valid(raise_exception=True)
                 self.perform_update(serializer)
@@ -251,12 +259,8 @@ class StockViewSet(_BaseViewSet):
                         "success": True,
                         "message": "Stock updated successfully!",
                         "data": serializer.data,
-                    },
-                    status=status.HTTP_200_OK,
+                    }
                 )
-            except Stock.DoesNotExist:
-
-                pass
 
         return super().create(request, *args, **kwargs)
 
@@ -285,68 +289,29 @@ class InboundShipmentViewSet(_BaseViewSet):
 
     @action(detail=True, methods=["post"], url_path="receive")
     @idempotent_request()
-    @transaction.atomic
     def receive(self, request, pk=None):
         """Receive items from an inbound shipment."""
-        shipment = self.get_object()
-        receipts = request.data.get(
-            "items", []
-        )  # List of {variant_id, received_quantity}
+        receipts = request.data.get("items", [])
 
         if not receipts:
             return Response(
                 {"success": False, "message": "No items provided"}, status=400
             )
 
-        for receipt in receipts:
-            variant_id = receipt.get("variant_id")
-            qty = int(receipt.get("quantity", 0))
+        from .services import InventoryService
 
-            if qty <= 0:
-                continue
-
-            try:
-                item = InboundItem.objects.get(inbound=shipment, variant_id=variant_id)
-                item.received_quantity += qty
-                item.save()
-
-                # Update stock
-                stock, _ = Stock.objects.select_for_update().get_or_create(
-                    variant_id=variant_id, warehouse=item.warehouse
-                )
-                old_qty = stock.on_hand
-                stock.on_hand += qty
-                stock.save()
-
-                InventoryAudit.objects.create(
-                    event_type="receipt",
-                    variant_id=variant_id,
-                    warehouse=item.warehouse,
-                    quantity=qty,
-                    from_quantity=old_qty,
-                    to_quantity=stock.on_hand,
-                    reference=shipment.reference,
-                )
-            except InboundItem.DoesNotExist:
-                return Response(
-                    {
-                        "success": False,
-                        "message": f"Variant {variant_id} not in this shipment",
-                    },
-                    status=400,
-                )
-
-        all_received = not shipment.items.filter(
-            received_quantity__lt=F("expected_quantity")
-        ).exists()
-        if all_received:
-            shipment.status = "received"
-            shipment.received_at = timezone.now()
-        else:
-            shipment.status = "partial"
-        shipment.save()
-
-        return Response({"success": True, "message": "Items received successfully"})
+        try:
+            shipment = InventoryService.receive_shipment(pk, receipts)
+            return Response(
+                {
+                    "success": True,
+                    "message": f"Items received successfully. Shipment status: {shipment.status}",
+                }
+            )
+        except ValueError as e:
+            return Response({"success": False, "message": str(e)}, status=400)
+        except Exception as e:
+            return Response({"success": False, "message": "Internal error"}, status=500)
 
 
 class InboundItemViewSet(_BaseViewSet):

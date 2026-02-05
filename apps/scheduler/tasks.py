@@ -5,7 +5,8 @@ from django.utils import timezone
 from datetime import timedelta
 import logging
 
-from .models import ScheduledJob, IdempotencyKey
+from .models import ScheduledJob
+from apps.audit.models import IdempotencyKey
 
 logger = logging.getLogger(__name__)
 

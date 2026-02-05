@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import IdempotencyKey, ScheduledJob
+from .models import ScheduledJob
+from apps.audit.models import IdempotencyKey
 from datetime import datetime
 from django.utils import timezone
 
@@ -15,7 +16,8 @@ class IdempotencyKeySerializer(serializers.ModelSerializer):
             "id",
             "key",
             "request_hash",
-            "response",
+            "response_code",
+            "response_body",
             "status",
             "status_display",
             "created_at",
