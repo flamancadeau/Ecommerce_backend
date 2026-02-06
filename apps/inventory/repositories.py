@@ -31,7 +31,7 @@ class InventoryRepository:
         Priority 1: Warehouse with enough available stock.
         Priority 2: Warehouse with backorder enabled.
         """
-        # Priority 1
+
         stock = (
             Stock.objects.filter(
                 variant_id=variant_id,
@@ -45,7 +45,6 @@ class InventoryRepository:
         if stock:
             return stock
 
-        # Priority 2
         return (
             Stock.objects.filter(
                 variant_id=variant_id, warehouse__is_active=True, backorderable=True

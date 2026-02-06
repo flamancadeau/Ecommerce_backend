@@ -11,12 +11,11 @@ class PromotionsService:
         """
         Create a campaign with rules and discounts.
         """
-        # Ensure we don't pass nested data to the main Campaign create
+
         main_data = campaign_data.copy()
         main_data.pop("rules", None)
         main_data.pop("discounts", None)
 
-        # Parse dates if they are strings to avoid property comparison errors later
         from django.utils.dateparse import parse_datetime
 
         for field in ["start_at", "end_at"]:

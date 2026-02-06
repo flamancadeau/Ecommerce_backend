@@ -20,7 +20,6 @@ def idempotent_request(key_field="idempotency_key"):
             if not key:
                 return view_func(view_instance, request, *args, **kwargs)
 
-            # Different paths with same key should be treated as different requests
             full_key = f"{request.path}:{key}"
 
             idem_key, created = IdempotencyService.verify_or_create(
@@ -36,7 +35,6 @@ def idempotent_request(key_field="idempotency_key"):
                     return Response(
                         {"error": "Request is already being processed"}, status=409
                     )
-                # If failed, we retry (the service selected for update, so we can continue)
 
             try:
                 response = view_func(view_instance, request, *args, **kwargs)

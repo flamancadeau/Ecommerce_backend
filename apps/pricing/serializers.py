@@ -27,7 +27,6 @@ class PriceBookSerializer(serializers.ModelSerializer):
         channel = attrs.get("channel", "")
         customer_group = attrs.get("customer_group", "")
 
-        # Check for unique_together constraint manually to provide a better error
         qs = PriceBook.objects.filter(
             country=country, channel=channel, customer_group=customer_group
         )
@@ -37,9 +36,11 @@ class PriceBookSerializer(serializers.ModelSerializer):
 
         existing = qs.first()
         if existing:
+
             raise serializers.ValidationError(
                 {
-                    "non_field_errors": f"A Price Book with this context (Country: {country}, Channel: {channel}, Group: {customer_group}) already exists. Please update the existing Price Book (ID: {existing.id}) or use a different combination."
+                    "context_error": f"You already have a Price Book named '{existing.name}' (ID: {existing.id}) for this combination of Country ({country or 'Global'}), Channel ({channel}), and Group ({customer_group}).",
+                    "suggestion": "Please edit the existing Price Book instead of creating a new one.",
                 }
             )
         return attrs
@@ -81,7 +82,6 @@ class PriceBookEntrySerializer(serializers.ModelSerializer):
                 "Only one of 'variant', 'product' or 'category' may be set."
             )
 
-        # Best Practice Check: Max Quantity must be >= Min Quantity
         min_q = attrs.get("min_quantity", 1)
         max_q = attrs.get("max_quantity")
 
@@ -136,16 +136,12 @@ class PriceQuoteRequestSerializer(serializers.Serializer):
     items = PriceQuoteItemSerializer(many=True)
 
 
-class ExplainPriceQuerySerializer(serializers.Serializer):
+class PriceExplainRequestSerializer(serializers.Serializer):
     variant_id = serializers.UUIDField(help_text="UUID of the variant")
     quantity = serializers.IntegerField(
-        required=False, default=1, help_text="Quantity to calculate for"
+        required=False, default=1, min_value=1, help_text="Quantity to calculate for"
     )
     at = serializers.DateTimeField(
         required=False, help_text="ISO timestamp for price-as-of-time"
     )
-    context = serializers.CharField(
-        required=False,
-        default="{}",
-        help_text="JSON string of customer context (currency, country, etc.)",
-    )
+    customer_context = CustomerContextSerializer(required=False)

@@ -290,7 +290,7 @@ class StockViewSet(_BaseViewSet):
         },
     )
     def create(self, request, *args, **kwargs):
-        # Override to handle upsert-like behavior with adjustment
+
         variant_id = request.data.get("variant")
         warehouse_id = request.data.get("warehouse")
         quantity = request.data.get("quantity")
@@ -302,17 +302,16 @@ class StockViewSet(_BaseViewSet):
         try:
             with transaction.atomic():
                 if quantity is not None:
-                    # Use service for adjustment to maintain audit log
+
                     stock = InventoryService.adjust_stock(
                         variant_id, warehouse_id, int(quantity), reason
                     )
                 else:
-                    # Just get or create the stock record
+
                     stock, _ = Stock.objects.get_or_create(
                         variant_id=variant_id, warehouse_id=warehouse_id
                     )
 
-                # Update other fields (settings)
                 serializer = self.get_serializer(stock, data=request.data, partial=True)
                 serializer.is_valid(raise_exception=True)
                 serializer.save()

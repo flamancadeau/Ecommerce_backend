@@ -60,26 +60,19 @@ class CampaignSerializer(serializers.ModelSerializer):
         discounts_data = validated_data.pop("discounts", None)
 
         with transaction.atomic():
-            # Update main record
+
             for attr, value in validated_data.items():
                 setattr(instance, attr, value)
             instance.save()
 
-            # Update nested rules if provided
             if rules_data is not None:
                 instance.rules.all().delete()
                 for rule_data in rules_data:
                     CampaignRule.objects.create(campaign=instance, **rule_data)
 
-            # Update nested discounts if provided
             if discounts_data is not None:
                 instance.discounts.all().delete()
                 for discount_data in discounts_data:
                     CampaignDiscount.objects.create(campaign=instance, **discount_data)
 
             return instance
-
-    def to_representation(self, instance):
-        representation = super().to_representation(instance)
-        representation.pop("code", None)
-        return representation

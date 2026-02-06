@@ -30,7 +30,7 @@ class Warehouse(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.code:
-            # Sort by code to find the highest sequential one
+
             last_warehouse = (
                 Warehouse.objects.filter(code__startswith="WH")
                 .order_by("-code")
@@ -42,7 +42,7 @@ class Warehouse(models.Model):
                     last_number = int(num_part)
                     self.code = f"WH{last_number + 1:03d}"
                 except (ValueError, TypeError):
-                    # Fallback if the code isn't just WH + digits
+
                     import secrets
 
                     self.code = f"WH-{secrets.token_hex(4).upper()}"
@@ -144,7 +144,7 @@ class InboundShipment(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.reference:
-            # Sort by reference to find the highest sequential one
+
             last_shipment = (
                 InboundShipment.objects.filter(reference__startswith="INB")
                 .order_by("-reference")
@@ -156,7 +156,7 @@ class InboundShipment(models.Model):
                     last_number = int(num_part)
                     self.reference = f"INB{last_number + 1:03d}"
                 except (ValueError, TypeError):
-                    # Fallback if current refs are like INB-20260131-77BB20
+
                     import secrets
 
                     self.reference = f"INB-{timezone.now().strftime('%Y%p%d')}-{secrets.token_hex(3).upper()}"

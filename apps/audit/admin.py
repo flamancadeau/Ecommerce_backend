@@ -28,7 +28,7 @@ class IdempotencyKeyAdmin(admin.ModelAdmin):
     is_expired.boolean = True
 
     def has_response(self, obj):
-        return obj.response is not None
+        return obj.response_body is not None
 
     has_response.boolean = True
 

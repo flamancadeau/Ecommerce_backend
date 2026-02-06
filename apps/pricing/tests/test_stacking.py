@@ -160,10 +160,11 @@ class TestPricingStacking:
             campaign=camp, discount_type="percentage", value=Decimal("15.00")
         )
 
-        url = f"/api/pricing/explain/?variant_id={variant.id}&at={now.isoformat()}"
-        response = client.get(url)
+        url = "/api/pricing/explain/"
+        data = {"variant_id": str(variant.id), "at": now.isoformat()}
+        response = client.post(url, data=data, format="json")
         assert response.status_code == 200
         data = response.data["data"]
         assert data["base_price_used"] == 100.0
-        assert len(data["campaigns_considered"]) >= 1
+        assert len(data["campaigns_analysis"]) >= 1
         assert data["final_calculation"]["discount_amount"] == 15.0

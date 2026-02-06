@@ -35,11 +35,7 @@ class OrderService:
         expires_at = timezone.now() + timezone.timedelta(minutes=15)
 
         with transaction.atomic():
-            # We want one reservation token for the whole cart?
-            # or one per item?
-            # Usually one "Reservation Group" or share the token.
-            # The model has `reservation_token` on each Reservation object.
-            # We can generate one token and share it.
+
             from apps.orders.models import generate_reservation_token
 
             shared_token = generate_reservation_token()
@@ -48,15 +44,12 @@ class OrderService:
                 variant = item.variant
                 quantity = item.quantity
 
-                # 1. Find best warehouse to reserve from
                 stock = InventoryService.get_stock_for_fulfillment(variant, quantity)
                 if not stock:
                     raise ValidationError(
                         f"Insufficient stock for {variant.sku} (Global check)"
                     )
 
-                # 2. Lock and Reserve
-                # We need to re-fetch with lock to be safe
                 locked_stock = Stock.objects.select_for_update().get(id=stock.id)
 
                 if not locked_stock.can_fulfill(quantity):
@@ -67,7 +60,6 @@ class OrderService:
                 locked_stock.reserved += quantity
                 locked_stock.save()
 
-                # 3. Create Reservation Record
                 res = Reservation.objects.create(
                     reservation_token=shared_token,
                     variant=variant,
@@ -78,7 +70,6 @@ class OrderService:
                 )
                 reservations.append(res)
 
-                # Audit
                 InventoryAudit.objects.create(
                     event_type=InventoryAudit.EventType.RESERVATION,
                     variant=variant,
@@ -109,39 +100,22 @@ class OrderService:
             if not reservations.exists():
                 raise ValidationError("Invalid or expired reservation")
 
-            # Validate expiry
             first_res = reservations.first()
             if first_res.is_expired:
-                # Trigger expiry logic? Use task for that.
-                # Just fail for now.
+
                 raise ValidationError("Reservation expired")
 
-            # Calculate Totals
             subtotal = Decimal("0")
             order_items_data = []
-
-            # We need to get price again? Or was it locked in cart?
-            # Usually price is locked at checkout.
-            # For simplicity, we recalculate or trust the cart if we linked it.
-            # Since Reservation model doesn't link to CartItem price, we re-fetch price "as of now"
-            # OR we should have stored price in Reservation?
-            # Ideally, `Reservation` should probably be linked to `Order` eventually.
-
-            # We will use current price logic for now, or the price from the cart if we can find it.
-            # But we only have token.
-            # Let's assume re-pricing is acceptable or we use base price.
-            # BETTER: The prompt says "Price as of time T reproducibility".
-            # We will calculate price NOW.
 
             from apps.pricing.services import PricingService
 
             current_time = timezone.now()
-            # Mock context
+
             context = {"channel": "web", "email": email}
 
             for res in reservations:
-                # Consume Reservation
-                # 1. Update Stock: reserved -> -qty, on_hand -> -qty
+
                 stock = Stock.objects.select_for_update().get(
                     variant=res.variant, warehouse=res.warehouse
                 )
@@ -150,11 +124,9 @@ class OrderService:
                 stock.on_hand -= res.quantity
                 stock.save()
 
-                # 2. Update Reservation Status
                 res.status = Reservation.Status.CONFIRMED
                 res.save()
 
-                # 3. Calculate Price
                 price_data = PricingService.calculate_item_price(
                     res.variant.id, res.quantity, current_time, context
                 )
@@ -185,18 +157,16 @@ class OrderService:
                     notes="Order confirmed from reservation",
                 )
 
-            # Taxes & Shipping
             tax_rate = Decimal("0.21")
             tax_amount = subtotal * tax_rate
             shipping_amount = Decimal("5.99")
             total = subtotal + tax_amount + shipping_amount
 
-            # Create Order
             order = Order.objects.create(
                 customer_id=customer_id,
                 customer_email=email,
                 shipping_address=shipping_address,
-                billing_address=shipping_address,  # Simplified
+                billing_address=shipping_address,
                 subtotal=subtotal,
                 tax_amount=tax_amount,
                 shipping_amount=shipping_amount,
@@ -215,7 +185,6 @@ class OrderService:
                     variant_name=item_data["variant_name"],
                 )
 
-            # Link reservations to order logic could be here if Reservation has order FK
             reservations.update(order=order)
 
             return order
@@ -225,7 +194,7 @@ class OrderService:
         """
         Create order directly from cart (implicit reservation).
         """
-        # Reuse logic: Create Reservation -> Confirm Reservation
+
         res_data = OrderService.create_reservation(cart_id)
         token = res_data["reservation_token"]
         return OrderService.create_order_from_reservation(

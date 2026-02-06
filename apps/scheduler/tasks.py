@@ -1,4 +1,4 @@
-from functools import cache
+from django.core.cache import cache
 from django.db.models import F
 from celery import shared_task
 from django.utils import timezone

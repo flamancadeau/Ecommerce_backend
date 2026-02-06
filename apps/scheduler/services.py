@@ -18,7 +18,6 @@ class SchedulerService:
             status=ScheduledJob.Status.PENDING,
         )
 
-        # Enqueue with Celery
         execute_scheduled_job.apply_async(args=[str(job.id)], eta=scheduled_at)
 
         logger.info(f"Scheduled job created: {job_type} for {scheduled_at}")

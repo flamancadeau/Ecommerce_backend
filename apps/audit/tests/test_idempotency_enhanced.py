@@ -28,7 +28,7 @@ class TestIdempotencyEnhanced:
 
     def test_auto_order_linking(self):
         """Test that the system automatically links an IdempotencyKey to an Order if ID is found."""
-        # Create a real Order first
+
         order = Order.objects.create(
             order_number="ORD-TEST-999",
             customer_email="customer@example.com",
@@ -37,7 +37,6 @@ class TestIdempotencyEnhanced:
             total="100.00",
         )
 
-        # Post a result that references this order_number in the body
         data = {
             "key": "test-key-linking",
             "response_code": 201,

@@ -21,7 +21,7 @@ from .serializers import (
     PriceBookEntrySerializer,
     TaxRateSerializer,
     PriceQuoteRequestSerializer,
-    ExplainPriceQuerySerializer,
+    PriceExplainRequestSerializer,
 )
 
 
@@ -232,15 +232,39 @@ class TaxRateViewSet(viewsets.ModelViewSet):
         return self.perform_destroy(instance)
 
 
+@swagger_auto_schema(
+    method="post",
+    request_body=PriceQuoteRequestSerializer,
+    responses={
+        200: openapi.Response(
+            description="Price calculation successful",
+            schema=openapi.Schema(type=openapi.TYPE_OBJECT),
+        ),
+        400: "Invalid request data",
+    },
+)
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def price_quote(request):
+    """
+    Calculate price for a list of items based on customer context and time.
+    """
+    serializer = PriceQuoteRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(
+            {
+                "status": False,
+                "message": "Invalid request data",
+                "errors": serializer.errors,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     try:
-        data = request.data
-        at_time = parse_timestamp(data.get("at"))
-        customer_context = data.get("customer_context", {})
-        items_data = data.get("items", [])
+        validated_data = serializer.validated_data
+        at_time = validated_data.get("at") or timezone.now()
+        customer_context = validated_data.get("customer_context", {})
+        items_data = validated_data.get("items", [])
         results = []
 
         from apps.pricing.services import PricingService
@@ -269,7 +293,7 @@ def price_quote(request):
                 "status": True,
                 "message": "Price calculated successfully",
                 "data": {
-                    "calculated_at": data.get("at", timezone.now().isoformat()),
+                    "calculated_at": at_time.isoformat(),
                     "customer_context": customer_context,
                     "items": results,
                     "summary": summary,
@@ -289,33 +313,48 @@ def price_quote(request):
 
 
 @swagger_auto_schema(
-    method="get",
-    query_serializer=ExplainPriceQuerySerializer,
+    method="post",
+    request_body=PriceExplainRequestSerializer,
     responses={
         200: openapi.Response(
-            description="Price explanation",
+            description="Price explanation generated",
             schema=openapi.Schema(type=openapi.TYPE_OBJECT),
-        )
+        ),
+        400: "Invalid request data",
     },
 )
-@api_view(["GET"])
+@api_view(["POST"])
 @permission_classes([AllowAny])
 def explain_price(request):
+    """
+    Generate a detailed explanation of how a price was calculated for a variant.
+    """
+    serializer = PriceExplainRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(
+            {
+                "status": False,
+                "message": "Invalid request data",
+                "errors": serializer.errors,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     try:
-        variant_id = request.GET.get("variant_id")
-        at_time = parse_timestamp(request.GET.get("at"))
-        context_str = request.GET.get("context", "{}")
-        quantity = int(request.GET.get("quantity", 1))
-
-        customer_context = json.loads(context_str)
+        validated_data = serializer.validated_data
+        variant_id = validated_data["variant_id"]
+        at_time = validated_data.get("at") or timezone.now()
+        quantity = validated_data.get("quantity", 1)
+        customer_context = validated_data.get("customer_context", {})
 
         from apps.catalog.models import Variant
         from apps.pricing.services import PricingService
 
         variant = get_object_or_404(Variant, id=variant_id)
 
-        base_price = PricingService.get_base_price(variant, customer_context, at_time)
+        base_price = PricingService.get_base_price(
+            variant, customer_context, at_time, quantity
+        )
         campaigns = PricingService.get_applicable_campaigns(
             variant, customer_context, at_time, quantity
         )
@@ -327,18 +366,12 @@ def explain_price(request):
             variant_id, quantity, at_time, customer_context
         )
 
-        # Best Practice: Detailed Match Analysis for Price Books
         checks = []
-        possible_entries = (
-            PriceBookEntry.objects.filter(
-                Q(variant=variant)
-                | Q(product=variant.product)
-                | Q(category=variant.product.category),
-                effective_from__lte=at_time,
-            )
-            .filter(Q(effective_to__gte=at_time) | Q(effective_to__isnull=True))
-            .select_related("price_book")
-        )
+        possible_entries = PriceBookEntry.objects.filter(
+            Q(variant=variant)
+            | Q(product=variant.product)
+            | Q(category=variant.product.category)
+        ).select_related("price_book")
 
         customer_currency = customer_context.get("currency", "EUR")
         customer_country = customer_context.get("country", "")
@@ -348,6 +381,9 @@ def explain_price(request):
         for entry in possible_entries:
             pb = entry.price_book
             mismatches = []
+
+            if not pb.is_active:
+                mismatches.append("Price Book is inactive")
             if pb.currency != customer_currency:
                 mismatches.append(f"Currency ({pb.currency} != {customer_currency})")
             if pb.country and pb.country != customer_country:
@@ -359,7 +395,11 @@ def explain_price(request):
                     f"Group ({pb.customer_group} != {customer_membership})"
                 )
 
-            # Tier check
+            if entry.effective_from > at_time:
+                mismatches.append(f"Not effective yet (Starts {entry.effective_from})")
+            if entry.effective_to and entry.effective_to < at_time:
+                mismatches.append(f"Expired (Ended {entry.effective_to})")
+
             if entry.min_quantity > quantity:
                 mismatches.append(
                     f"Quantity too low (Need {entry.min_quantity}, have {quantity})"
@@ -384,6 +424,44 @@ def explain_price(request):
                 }
             )
 
+        from apps.promotions.models import Campaign
+
+        campaign_checks = []
+
+        potential_campaigns = Campaign.objects.filter(
+            end_at__gte=at_time - timezone.timedelta(days=1)
+        )
+
+        for campaign in potential_campaigns:
+            c_mismatches = []
+            if not campaign.is_active:
+                c_mismatches.append("Campaign is disabled (is_active=False)")
+            if campaign.start_at > at_time:
+                c_mismatches.append(f"Scheduled for future ({campaign.start_at})")
+            if campaign.end_at < at_time:
+                c_mismatches.append(f"Already expired ({campaign.end_at})")
+
+            if not PricingService.is_customer_eligible(campaign, customer_context):
+                c_mismatches.append(
+                    f"Customer group not eligible. Allowed: {campaign.customer_groups}"
+                )
+
+            if not PricingService.does_campaign_apply(campaign, variant):
+                c_mismatches.append("Product/Brand rules do not match this variant")
+
+            if not PricingService.meets_quantity_requirements(campaign, quantity):
+                c_mismatches.append("Quantity requirements not met")
+
+            campaign_checks.append(
+                {
+                    "code": campaign.code,
+                    "name": campaign.name,
+                    "is_eligible": len(c_mismatches) == 0,
+                    "mismatches": c_mismatches,
+                    "priority": campaign.priority,
+                }
+            )
+
         explanation = {
             "variant": {
                 "id": str(variant.id),
@@ -400,26 +478,15 @@ def explain_price(request):
             },
             "base_price_used": float(base_price),
             "tax_rate_used": float(tax_rate),
-            "campaigns_considered": [
-                {
-                    "id": str(campaign.id),
-                    "code": campaign.code,
-                    "name": campaign.name,
-                    "priority": campaign.priority,
-                    "stackable": campaign.stacking_type != "none",
-                    "start_at": campaign.start_at.isoformat(),
-                    "end_at": campaign.end_at.isoformat(),
-                }
-                for campaign in campaigns
-            ],
             "price_books_analysis": checks,
+            "campaigns_analysis": campaign_checks,
             "final_calculation": final_calculation,
         }
 
         return Response(
             {
                 "status": True,
-                "message": "Price explanation generated",
+                "message": "Price explanation generated with troubleshooting diagnostics",
                 "data": explanation,
             }
         )

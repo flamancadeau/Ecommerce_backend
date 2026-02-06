@@ -11,7 +11,6 @@ class PricingRepository:
         """Finds the most specific price entry, falling back to 'Default' if needed."""
         now = timezone.now()
 
-        # 1. Try to find an exact match for the customer context
         query_base = (
             PriceBookEntry.objects.filter(
                 Q(variant=variant)
@@ -39,7 +38,6 @@ class PricingRepository:
         if entry:
             return entry
 
-        # 2. Fallback to the 'Default' Price Book for this currency
         return (
             query_base.filter(price_book__is_default=True)
             .order_by("variant", "product", "category", "-min_quantity")
@@ -95,7 +93,6 @@ class PricingRepository:
         if entry:
             return entry
 
-        # Fallback to the 'Default' Price Book for this currency
         return (
             query_base.filter(price_book__is_default=True)
             .order_by("variant", "product", "category", "-min_quantity")

@@ -32,7 +32,6 @@ class PricingService:
 
         applicable_campaigns.sort(key=lambda x: x.priority, reverse=True)
 
-        # Track if we can continue stacking
         can_stack = True
 
         for campaign in applicable_campaigns:
@@ -92,7 +91,6 @@ class PricingService:
         total_tax = tax_amount * quantity
         total_price = (final_price + tax_amount) * quantity
 
-        # Check availability
         from apps.inventory.services import InventoryService
 
         availability = InventoryService.check_availability(variant, quantity)
@@ -166,15 +164,25 @@ class PricingService:
     @staticmethod
     def is_customer_eligible(campaign, customer_context):
         """Check if customer is eligible for campaign."""
-        if campaign.customer_groups:
-            customer_group = customer_context.get("membership_tier", "standard")
-            if customer_group not in campaign.customer_groups:
-                return False
+        customer_group = str(customer_context.get("membership_tier", "retail")).lower()
 
-        if campaign.excluded_customer_groups:
-            customer_group = customer_context.get("membership_tier", "standard")
-            if customer_group in campaign.excluded_customer_groups:
-                return False
+        def get_group_list(data):
+            if not data:
+                return []
+            if isinstance(data, list):
+                return [str(g).lower() for g in data]
+            if isinstance(data, dict):
+
+                return [str(k).lower() for k, v in data.items() if v]
+            return []
+
+        allowed_groups = get_group_list(campaign.customer_groups)
+        if allowed_groups and customer_group not in allowed_groups:
+            return False
+
+        excluded_groups = get_group_list(campaign.excluded_customer_groups)
+        if excluded_groups and customer_group in excluded_groups:
+            return False
 
         return True
 
@@ -189,12 +197,10 @@ class PricingService:
         include_rules = [r for r in rules if r.action == "include"]
         exclude_rules = [r for r in rules if r.action == "exclude"]
 
-        # 1. Check exclusions first
         for rule in exclude_rules:
             if PricingService.evaluate_rule(rule, variant):
                 return False
 
-        # 2. Check inclusions
         if not include_rules:
             return True
 
@@ -206,6 +212,7 @@ class PricingService:
 
     @staticmethod
     def evaluate_rule(rule, variant):
+        """Evaluate a single campaign rule against a variant."""
         if rule.rule_type == "product":
             return rule.value == str(variant.product.id)
 
@@ -217,13 +224,17 @@ class PricingService:
                 return rule.value == str(variant.product.category.id)
 
         elif rule.rule_type == "brand":
-            return rule.value == variant.product.brand
+
+            return (rule.value or "").lower() == (variant.product.brand or "").lower()
 
         elif rule.rule_type == "attribute":
             try:
                 attr_key, attr_value = rule.value.split(":", 1)
-                return variant.attributes.get(attr_key) == attr_value
-            except ValueError:
+                variant_val = variant.attributes.get(attr_key)
+                if variant_val is None:
+                    return False
+                return str(variant_val).lower() == str(attr_value).lower()
+            except (ValueError, AttributeError):
                 return False
 
         return False

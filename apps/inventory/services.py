@@ -59,7 +59,6 @@ class InventoryService:
             except InboundItem.DoesNotExist:
                 raise ValueError(f"Variant {variant_id} not in this shipment")
 
-        # Check if fully received
         all_received = not shipment.items.filter(
             received_quantity__lt=F("expected_quantity")
         ).exists()

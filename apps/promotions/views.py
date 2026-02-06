@@ -1,6 +1,7 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from apps.audit.idempotency import idempotent_request
 
@@ -13,7 +14,6 @@ from apps.audit.models import CampaignAudit
 from .serializers import (
     PriceBookSerializer,
     CampaignSerializer,
-    CampaignRuleSerializer,
 )
 
 
@@ -23,8 +23,22 @@ class PriceBookViewSet(viewsets.ModelViewSet):
 
 
 class CampaignViewSet(viewsets.ModelViewSet):
+    """
+    API for managing promotional campaigns.
+    Use this to retrieve campaign IDs for the scheduler.
+    """
+
     queryset = Campaign.objects.all()
     serializer_class = CampaignSerializer
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
+    filterset_fields = ["is_active"]
+    search_fields = ["name", "code", "description"]
+    ordering_fields = ["start_at", "priority", "created_at"]
+    ordering = ["-created_at"]
 
     def get_queryset(self):
         qs = super().get_queryset()

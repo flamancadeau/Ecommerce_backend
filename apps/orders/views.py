@@ -6,7 +6,7 @@ from django.db import transaction, models
 from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
-import uuid
+
 
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -54,7 +54,7 @@ class CartViewSet(viewsets.ModelViewSet):
 
         user = self.request.user
         request_data = self.request.data if isinstance(self.request.data, dict) else {}
-        # Look for session_id in request.data first (for API users who managed sessions manually)
+
         session_key = request_data.get("session_id") or self.request.session.session_key
 
         if not session_key:
@@ -377,7 +377,6 @@ class CheckoutViewSet(viewsets.ViewSet):
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    # Legacy endpoint support if needed, redirects to place_order logic
     @swagger_auto_schema(
         operation_description="Finalize checkout and place an order. Use either reservation_token or cart_id.",
         request_body=openapi.Schema(

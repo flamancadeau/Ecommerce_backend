@@ -7,6 +7,9 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 import logging
 
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+
 from .models import ScheduledJob
 from apps.audit.models import IdempotencyKey
 from apps.audit.services import IdempotencyService
@@ -15,6 +18,8 @@ from .serializers import (
     ScheduledJobSerializer,
     CreateScheduledJobSerializer,
     IdempotencyRequestSerializer,
+    CampaignActivationSerializer,
+    CreateIdempotencyKeySerializer,
 )
 from .services import SchedulerService
 
@@ -22,9 +27,15 @@ logger = logging.getLogger(__name__)
 
 
 class IdempotencyKeyViewSet(viewsets.ModelViewSet):
+    """
+    API for managing Idempotency Keys.
+    Keys are primarily used to ensure request safety.
+    """
+
     queryset = IdempotencyKey.objects.all()
     serializer_class = IdempotencyKeySerializer
     permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "post", "head", "options"]
     filter_backends = [
         DjangoFilterBackend,
         filters.SearchFilter,
@@ -35,13 +46,68 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
     ordering_fields = ["created_at", "expires_at"]
     ordering = ["-created_at"]
 
+    def get_serializer_class(self):
+        if self.action == "create":
+            return CreateIdempotencyKeySerializer
+        return IdempotencyKeySerializer
+
     def get_queryset(self):
         queryset = super().get_queryset()
         if not self.request.user.is_staff:
             return queryset.none()
         return queryset
 
-    @action(detail=True, methods=["post"])
+    @swagger_auto_schema(
+        operation_description="Create a new idempotency key manually or let the system auto-generate one.",
+        request_body=CreateIdempotencyKeySerializer,
+        responses={201: IdempotencyKeySerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = CreateIdempotencyKeySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        key_val = serializer.validated_data.get("key")
+        if not key_val:
+            key_val = IdempotencyService.generate_key()
+
+        instance = IdempotencyKey.objects.create(
+            key=key_val,
+            status=serializer.validated_data.get(
+                "status", IdempotencyKey.Status.PROCESSING
+            ),
+            response_body=serializer.validated_data.get("response_body"),
+            expires_at=serializer.validated_data.get("expires_at")
+            or (timezone.now() + timezone.timedelta(hours=24)),
+        )
+
+        full_serializer = IdempotencyKeySerializer(
+            instance, data=request.data, partial=True
+        )
+        full_serializer.is_valid()
+        full_serializer.save()
+
+        return Response(
+            {
+                "status": True,
+                "message": "Idempotency key created successfully",
+                "data": IdempotencyKeySerializer(instance).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @swagger_auto_schema(
+        operation_description="Mark an idempotency key as successfully completed",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "response": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    description="Optional response body to cache",
+                )
+            },
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="complete")
     def complete(self, request, pk=None):
         key = self.get_object()
         if key.status != IdempotencyKey.Status.PROCESSING:
@@ -59,13 +125,50 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
             }
         )
 
-    @action(detail=True, methods=["post"])
+    @swagger_auto_schema(
+        operation_description="Mark an idempotency key as failed and record the reason.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "reason": openapi.Schema(
+                    type=openapi.TYPE_STRING, description="Brief explanation of failure"
+                ),
+                "error_details": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    description="Detailed error object for debugging",
+                ),
+            },
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="fail")
     def fail(self, request, pk=None):
         key = self.get_object()
-        IdempotencyService.mark_failed(key)
-        return Response({"status": True, "message": "Key marked as failed"})
 
-    @action(detail=False, methods=["post"])
+        error_data = {
+            "reason": request.data.get("reason", "Manual failure trigger"),
+            "details": request.data.get("error_details", {}),
+            "failed_at": timezone.now().isoformat(),
+        }
+
+        IdempotencyService.mark_failed(key)
+
+        key.response_body = error_data
+        key.response_code = 500
+        key.save()
+
+        return Response(
+            {
+                "status": True,
+                "message": "Key marked as failed and error recorded",
+                "error_stored": error_data,
+            }
+        )
+
+    @swagger_auto_schema(
+        operation_description="Claim, Verify, or Create a new idempotency key for a specific business flow.",
+        request_body=IdempotencyRequestSerializer,
+    )
+    @action(detail=False, methods=["post"], url_path="verify")
     def verify(self, request):
         serializer = IdempotencyRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -94,6 +197,10 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
 
 
 class ScheduledJobViewSet(viewsets.ModelViewSet):
+    """
+    API for managing and monitoring scheduled background jobs.
+    """
+
     queryset = ScheduledJob.objects.all()
     permission_classes = [IsAuthenticated]
     filter_backends = [
@@ -111,14 +218,39 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
             return CreateScheduledJobSerializer
         return ScheduledJobSerializer
 
-    def perform_create(self, serializer):
-        SchedulerService.create_job(
+    @swagger_auto_schema(
+        operation_description="Create a new scheduled background job",
+        request_body=CreateScheduledJobSerializer,
+        responses={201: ScheduledJobSerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = CreateScheduledJobSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        job = SchedulerService.create_job(
             job_type=serializer.validated_data["job_type"],
             scheduled_at=serializer.validated_data["scheduled_at"],
             payload=serializer.validated_data.get("payload"),
         )
 
-    @action(detail=True, methods=["post"])
+        response_serializer = ScheduledJobSerializer(job)
+        return Response(
+            {
+                "status": True,
+                "message": "Job created and enqueued successfully",
+                "data": response_serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def perform_create(self, serializer):
+
+        pass
+
+    @swagger_auto_schema(
+        operation_description="Force immediate execution of a pending job"
+    )
+    @action(detail=True, methods=["post"], url_path="execute-now")
     def execute_now(self, request, pk=None):
         job = self.get_object()
         try:
@@ -127,7 +259,8 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
         except ValueError as e:
             return Response({"status": False, "message": str(e)}, status=400)
 
-    @action(detail=True, methods=["post"])
+    @swagger_auto_schema(operation_description="Cancel a scheduled job")
+    @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
         job = self.get_object()
         try:
@@ -136,7 +269,8 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
         except ValueError as e:
             return Response({"status": False, "message": str(e)}, status=400)
 
-    @action(detail=True, methods=["post"])
+    @swagger_auto_schema(operation_description="Retry a failed or cancelled job")
+    @action(detail=True, methods=["post"], url_path="retry")
     def retry(self, request, pk=None):
         job = self.get_object()
         try:
@@ -145,7 +279,10 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
         except ValueError as e:
             return Response({"status": False, "message": str(e)}, status=400)
 
-    @action(detail=False, methods=["get"])
+    @swagger_auto_schema(
+        operation_description="Retrieve all jobs that missed their scheduled time"
+    )
+    @action(detail=False, methods=["get"], url_path="overdue")
     def overdue(self, request):
         now = timezone.now()
         queryset = self.get_queryset().filter(
@@ -159,17 +296,38 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
-    @action(detail=False, methods=["post"])
+    @swagger_auto_schema(
+        operation_description="Shortcut to schedule a promotion campaign activation",
+        request_body=CampaignActivationSerializer,
+        responses={201: ScheduledJobSerializer},
+    )
+    @action(detail=False, methods=["post"], url_path="schedule-campaign-activation")
     def schedule_campaign_activation(self, request):
-        campaign_id = request.data.get("campaign_id")
-        activate_at = request.data.get("activate_at")
+        serializer = CampaignActivationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        campaign_id = serializer.validated_data["campaign_id"]
+        activate_at = serializer.validated_data["activate_at"]
         try:
             job = SchedulerService.schedule_campaign_activation(
                 campaign_id, activate_at
             )
-            return Response({"status": True, "data": ScheduledJobSerializer(job).data})
+            return Response(
+                {
+                    "status": True,
+                    "message": f"Campaign activation job scheduled for {job.scheduled_at}",
+                    "data": ScheduledJobSerializer(job).data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
         except Exception as e:
-            return Response({"status": False, "message": str(e)}, status=400)
+            return Response(
+                {
+                    "status": False,
+                    "message": f"Failed to schedule activation: {str(e)}",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 @api_view(["GET"])
