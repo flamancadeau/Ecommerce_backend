@@ -104,3 +104,21 @@ class CampaignAudit(models.Model):
 
     def __str__(self):
         return f"{self.campaign.code}: {self.changed_field} changed"
+
+
+class IdempotencyKey(models.Model):
+    """Stores idempotency keys to prevent duplicate processing of the same request."""
+
+    key = models.CharField(max_length=255, unique=True)
+    request_path = models.CharField(max_length=255, blank=True)
+    response_code = models.IntegerField(null=True)
+    response_body = models.JSONField(null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["key"]),
+        ]
+
+    def __str__(self):
+        return self.key

@@ -5,6 +5,11 @@ from rest_framework.decorators import action
 from django.db.models import Q, F
 from django.utils import timezone
 from .models import Warehouse, Stock, InboundShipment, InboundItem
+from django.db import transaction
+from django.db.models import Sum
+from apps.audit.models import InventoryAudit
+from apps.audit.idempotency import idempotent_request
+from apps.catalog.models import Variant
 from .serializers import (
     WarehouseSerializer,
     StockSerializer,
@@ -167,6 +172,63 @@ class StockViewSet(_BaseViewSet):
 
         return queryset
 
+    @action(detail=False, methods=["post"], url_path="adjust")
+    @idempotent_request()
+    @transaction.atomic
+    def adjust(self, request):
+        """Manual adjustment of stock."""
+        variant_id = request.data.get("variant")
+        warehouse_id = request.data.get("warehouse")
+        quantity = int(request.data.get("quantity", 0))
+        reason = request.data.get("reason", "Manual adjustment")
+
+        if not all([variant_id, warehouse_id]):
+            return Response(
+                {"success": False, "message": "variant and warehouse are required"},
+                status=400,
+            )
+
+        stock, created = Stock.objects.select_for_update().get_or_create(
+            variant_id=variant_id, warehouse_id=warehouse_id
+        )
+
+        old_qty = stock.on_hand
+        stock.on_hand += quantity
+        stock.save()
+
+        InventoryAudit.objects.create(
+            event_type="adjustment",
+            variant_id=variant_id,
+            warehouse_id=warehouse_id,
+            quantity=quantity,
+            from_quantity=old_qty,
+            to_quantity=stock.on_hand,
+            notes=reason,
+        )
+
+        return Response({"success": True, "data": StockSerializer(stock).data})
+
+    @action(
+        detail=False, methods=["get"], url_path="variant-status/(?P<variant_id>[^/.]+)"
+    )
+    def variant_status(self, request, variant_id=None):
+        """Get stock status for a variant across all warehouses."""
+        stocks = Stock.objects.filter(variant_id=variant_id)
+        inbound_items = InboundItem.objects.filter(
+            variant_id=variant_id, inbound__status__in=["pending", "in_transit"]
+        )
+
+        data = {
+            "variant_id": variant_id,
+            "total_on_hand": stocks.aggregate(Sum("on_hand"))["on_hand__sum"] or 0,
+            "total_reserved": stocks.aggregate(Sum("reserved"))["reserved__sum"] or 0,
+            "total_available": stocks.aggregate(Sum("available"))["available__sum"]
+            or 0,
+            "warehouses": StockSerializer(stocks, many=True).data,
+            "inbound": InboundItemSerializer(inbound_items, many=True).data,
+        }
+        return Response({"success": True, "data": data})
+
     def create(self, request, *args, **kwargs):
 
         variant_id = request.data.get("variant")
@@ -220,6 +282,71 @@ class InboundShipmentViewSet(_BaseViewSet):
             )
 
         return queryset
+
+    @action(detail=True, methods=["post"], url_path="receive")
+    @idempotent_request()
+    @transaction.atomic
+    def receive(self, request, pk=None):
+        """Receive items from an inbound shipment."""
+        shipment = self.get_object()
+        receipts = request.data.get(
+            "items", []
+        )  # List of {variant_id, received_quantity}
+
+        if not receipts:
+            return Response(
+                {"success": False, "message": "No items provided"}, status=400
+            )
+
+        for receipt in receipts:
+            variant_id = receipt.get("variant_id")
+            qty = int(receipt.get("quantity", 0))
+
+            if qty <= 0:
+                continue
+
+            try:
+                item = InboundItem.objects.get(inbound=shipment, variant_id=variant_id)
+                item.received_quantity += qty
+                item.save()
+
+                # Update stock
+                stock, _ = Stock.objects.select_for_update().get_or_create(
+                    variant_id=variant_id, warehouse=item.warehouse
+                )
+                old_qty = stock.on_hand
+                stock.on_hand += qty
+                stock.save()
+
+                InventoryAudit.objects.create(
+                    event_type="receipt",
+                    variant_id=variant_id,
+                    warehouse=item.warehouse,
+                    quantity=qty,
+                    from_quantity=old_qty,
+                    to_quantity=stock.on_hand,
+                    reference=shipment.reference,
+                )
+            except InboundItem.DoesNotExist:
+                return Response(
+                    {
+                        "success": False,
+                        "message": f"Variant {variant_id} not in this shipment",
+                    },
+                    status=400,
+                )
+
+        all_received = not shipment.items.filter(
+            received_quantity__lt=F("expected_quantity")
+        ).exists()
+        if all_received:
+            shipment.status = "received"
+            shipment.received_at = timezone.now()
+        else:
+            shipment.status = "partial"
+        shipment.save()
+
+        return Response({"success": True, "message": "Items received successfully"})
 
 
 class InboundItemViewSet(_BaseViewSet):

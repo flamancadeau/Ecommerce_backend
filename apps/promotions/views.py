@@ -2,12 +2,14 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
+from apps.audit.idempotency import idempotent_request
 
 from .models import (
     PriceBook,
     Campaign,
     CampaignRule,
 )
+from apps.audit.models import CampaignAudit
 from .serializers import (
     PriceBookSerializer,
     CampaignSerializer,
@@ -23,6 +25,36 @@ class PriceBookViewSet(viewsets.ModelViewSet):
 class CampaignViewSet(viewsets.ModelViewSet):
     queryset = Campaign.objects.all()
     serializer_class = CampaignSerializer
+
+    @idempotent_request()
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+    @idempotent_request()
+    def update(self, request, *args, **kwargs):
+        return super().update(request, *args, **kwargs)
+
+    @idempotent_request()
+    def partial_update(self, request, *args, **kwargs):
+        return super().partial_update(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        CampaignAudit.objects.create(
+            campaign=instance,
+            changed_field="all",
+            new_value="Campaign created",
+            reason="Initial creation",
+        )
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        CampaignAudit.objects.create(
+            campaign=instance,
+            changed_field="multiple",
+            new_value="Campaign updated",
+            reason="Updates applied",
+        )
 
     def get_queryset(self):
         qs = super().get_queryset()
