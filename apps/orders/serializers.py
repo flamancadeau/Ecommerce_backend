@@ -27,6 +27,20 @@ class CartItemSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "unit_price", "total_price"]
 
 
+class CartItemAddSerializer(serializers.Serializer):
+    variant_id = serializers.UUIDField()
+    quantity = serializers.IntegerField(min_value=1, default=1)
+
+
+class CartItemUpdateSerializer(serializers.Serializer):
+    variant_id = serializers.UUIDField()
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class CartItemRemoveSerializer(serializers.Serializer):
+    variant_id = serializers.UUIDField()
+
+
 class CartSerializer(serializers.ModelSerializer):
     items = CartItemSerializer(many=True, read_only=True)
     item_count = serializers.IntegerField(read_only=True)

@@ -44,19 +44,21 @@ class PriceAudit(models.Model):
 class InventoryAudit(models.Model):
     """Audit trail for inventory changes."""
 
-    EVENT_TYPE_CHOICES = [
-        ("adjustment", "Manual Adjustment"),
-        ("reservation", "Reservation"),
-        ("release", "Reservation Release"),
-        ("fulfillment", "Order Fulfillment"),
-        ("receipt", "Inbound Receipt"),
-        ("transfer", "Warehouse Transfer"),
-        ("write_off", "Write Off"),
-        ("correction", "Correction"),
-    ]
+    class EventType(models.TextChoices):
+        ADJUSTMENT = "adjustment", "Manual Adjustment"
+        RESERVATION = "reservation", "Reservation"
+        RELEASE = "release", "Reservation Release"
+        FULFILLMENT = "fulfillment", "Order Fulfillment"
+        RECEIPT = "receipt", "Inbound Receipt"
+        TRANSFER = "transfer", "Warehouse Transfer"
+        WRITE_OFF = "write_off", "Write Off"
+        CORRECTION = "correction", "Correction"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    event_type = models.CharField(max_length=20, choices=EVENT_TYPE_CHOICES)
+    event_type = models.CharField(
+        max_length=20,
+        choices=EventType.choices,
+    )
     variant = models.ForeignKey("catalog.Variant", on_delete=models.CASCADE)
     warehouse = models.ForeignKey(
         "inventory.Warehouse", on_delete=models.CASCADE, null=True, blank=True
@@ -79,7 +81,7 @@ class InventoryAudit(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.event_type}: {self.variant.sku} ({self.quantity})"
+        return f"{self.get_event_type_display()}: {self.variant.sku} ({self.quantity})"
 
 
 class CampaignAudit(models.Model):
@@ -109,16 +111,45 @@ class CampaignAudit(models.Model):
 class IdempotencyKey(models.Model):
     """Stores idempotency keys to prevent duplicate processing of the same request."""
 
-    key = models.CharField(max_length=255, unique=True)
+    class Status(models.TextChoices):
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.CharField(max_length=255, unique=True, db_index=True)
+    request_hash = models.CharField(
+        max_length=64, db_index=True, blank=True, help_text="SHA256 hash of request"
+    )
     request_path = models.CharField(max_length=255, blank=True)
     response_code = models.IntegerField(null=True)
     response_body = models.JSONField(null=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PROCESSING
+    )
     created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    # Relationship to Order (Optional)
+    order = models.ForeignKey(
+        "orders.Order",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="idempotency_keys",
+    )
 
     class Meta:
+        ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["key"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["expires_at"]),
         ]
 
     def __str__(self):
         return self.key
+
+    @property
+    def is_expired(self) -> bool:
+        return bool(self.expires_at and self.expires_at < timezone.now())

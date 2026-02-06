@@ -1,76 +1,34 @@
-from django.db import models
 import uuid
+from django.db import models
 from django.utils import timezone
-
-
-class IdempotencyKey(models.Model):
-
-    STATUS_CHOICES = [
-        ("processing", "Processing"),
-        ("completed", "Completed"),
-        ("failed", "Failed"),
-    ]
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    key = models.CharField(max_length=100, unique=True, db_index=True)
-    request_hash = models.CharField(
-        max_length=64, db_index=True, help_text="SHA256 hash of request"
-    )
-    response = models.JSONField(null=True, blank=True)
-    status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default="processing"
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField()
-
-    class Meta:
-        ordering = ["-created_at"]
-        indexes = [
-            models.Index(fields=["key"]),
-            models.Index(fields=["request_hash"]),
-            models.Index(fields=["status"]),
-            models.Index(fields=["expires_at"]),
-        ]
-        verbose_name = "Idempotency Key"
-        verbose_name_plural = "Idempotency Keys"
-
-    def __str__(self):
-        return f"IdempotencyKey: {self.key[:20]}..."
-
-    @property
-    def is_expired(self):
-
-        if self.expires_at is None:
-            return False
-        return self.expires_at < timezone.now()
 
 
 class ScheduledJob(models.Model):
 
-    JOB_TYPE_CHOICES = [
-        ("campaign_activation", "Campaign Activation"),
-        ("campaign_expiration", "Campaign Expiration"),
-        ("reservation_expiry", "Reservation Expiry"),
-        ("inbound_receipt", "Inbound Receipt Processing"),
-        ("price_update", "Price Update"),
-        ("inventory_reorder", "Inventory Reorder"),
-        ("data_cleanup", "Data Cleanup"),
-        ("report_generation", "Report Generation"),
-    ]
+    class JobType(models.TextChoices):
+        CAMPAIGN_ACTIVATION = "campaign_activation", "Campaign Activation"
+        CAMPAIGN_EXPIRATION = "campaign_expiration", "Campaign Expiration"
+        RESERVATION_EXPIRY = "reservation_expiry", "Reservation Expiry"
+        INBOUND_RECEIPT = "inbound_receipt", "Inbound Receipt Processing"
+        PRICE_UPDATE = "price_update", "Price Update"
+        INVENTORY_REORDER = "inventory_reorder", "Inventory Reorder"
+        DATA_CLEANUP = "data_cleanup", "Data Cleanup"
+        REPORT_GENERATION = "report_generation", "Report Generation"
 
-    STATUS_CHOICES = [
-        ("pending", "Pending"),
-        ("running", "Running"),
-        ("completed", "Completed"),
-        ("failed", "Failed"),
-        ("cancelled", "Cancelled"),
-    ]
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    job_type = models.CharField(max_length=50, choices=JOB_TYPE_CHOICES)
+    job_type = models.CharField(max_length=50, choices=JobType.choices)
     scheduled_at = models.DateTimeField()
     executed_at = models.DateTimeField(null=True, blank=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
     payload = models.JSONField(default=dict, blank=True)
     result = models.JSONField(null=True, blank=True)
     error = models.TextField(blank=True)
@@ -93,44 +51,32 @@ class ScheduledJob(models.Model):
         return f"{self.get_job_type_display()} scheduled for {self.scheduled_at}"
 
     @property
-    def is_overdue(self):
-        """
-        Check if the job is overdue (past scheduled time and still pending).
-
-        Returns:
-            bool: True if job is pending and past scheduled time, False otherwise
-        """
-        # FIX: Add null check to prevent TypeError when scheduled_at is None
-        # This happens when creating new objects in Django admin
+    def is_overdue(self) -> bool:
+        """Check if the job is overdue (past scheduled time and still pending)."""
         if self.scheduled_at is None:
             return False
-        return self.status == "pending" and self.scheduled_at < timezone.now()
+        return self.status == self.Status.PENDING and self.scheduled_at < timezone.now()
 
     @property
-    def can_retry(self):
+    def can_retry(self) -> bool:
+        return self.status == self.Status.FAILED and self.retry_count < self.max_retries
 
-        return self.status == "failed" and self.retry_count < self.max_retries
-
-    def should_retry(self):
-
+    def should_retry(self) -> bool:
         return self.can_retry
 
     def mark_as_running(self):
-        """Mark the job as currently running."""
-        self.status = "running"
+        self.status = self.Status.RUNNING
         self.save(update_fields=["status", "updated_at"])
 
     def mark_as_completed(self, result=None):
-
-        self.status = "completed"
+        self.status = self.Status.COMPLETED
         self.executed_at = timezone.now()
         if result is not None:
             self.result = result
         self.save(update_fields=["status", "executed_at", "result", "updated_at"])
 
     def mark_as_failed(self, error_message=""):
-
-        self.status = "failed"
+        self.status = self.Status.FAILED
         self.executed_at = timezone.now()
         self.error = error_message
         self.retry_count += 1
@@ -145,6 +91,5 @@ class ScheduledJob(models.Model):
         )
 
     def mark_as_cancelled(self):
-        """Mark the job as cancelled."""
-        self.status = "cancelled"
+        self.status = self.Status.CANCELLED
         self.save(update_fields=["status", "updated_at"])

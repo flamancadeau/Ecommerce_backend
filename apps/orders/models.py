@@ -81,15 +81,15 @@ class CartItem(models.Model):
 
 
 class Order(models.Model):
-    STATUS_CHOICES = [
-        ("draft", "Draft"),
-        ("pending", "Pending Payment"),
-        ("confirmed", "Confirmed"),
-        ("processing", "Processing"),
-        ("shipped", "Shipped"),
-        ("delivered", "Delivered"),
-        ("cancelled", "Cancelled"),
-    ]
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        PENDING = "pending", "Pending Payment"
+        CONFIRMED = "confirmed", "Confirmed"
+        PROCESSING = "processing", "Processing"
+        SHIPPED = "shipped", "Shipped"
+        DELIVERED = "delivered", "Delivered"
+        CANCELLED = "cancelled", "Cancelled"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     order_number = models.CharField(max_length=50, unique=True, db_index=True)
@@ -112,7 +112,12 @@ class Order(models.Model):
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
 
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -136,14 +141,11 @@ class Order(models.Model):
             ).count()
             self.order_number = f"ORD-{date_str}-{last_order + 1:04d}"
 
-        if isinstance(self.subtotal, (int, float)):
-            self.subtotal = Decimal(str(self.subtotal))
-        if isinstance(self.tax_amount, (int, float)):
-            self.tax_amount = Decimal(str(self.tax_amount))
-        if isinstance(self.shipping_amount, (int, float)):
-            self.shipping_amount = Decimal(str(self.shipping_amount))
-        if isinstance(self.total, (int, float)):
-            self.total = Decimal(str(self.total))
+        # Ensure Decimal safety
+        for field in ("subtotal", "tax_amount", "shipping_amount", "total"):
+            value = getattr(self, field)
+            if isinstance(value, (int, float)):
+                setattr(self, field, Decimal(str(value)))
 
         super().save(*args, **kwargs)
 
@@ -177,18 +179,17 @@ class OrderItem(models.Model):
 
 
 class Reservation(models.Model):
-    STATUS_CHOICES = [
-        ("pending", "Pending"),
-        ("confirmed", "Confirmed"),
-        ("expired", "Expired"),
-        ("cancelled", "Cancelled"),
-    ]
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        CONFIRMED = "confirmed", "Confirmed"
+        EXPIRED = "expired", "Expired"
+        CANCELLED = "cancelled", "Cancelled"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     reservation_token = models.CharField(
         max_length=100,
-        unique=True,
         db_index=True,
         default=generate_reservation_token,
         editable=False,
@@ -197,8 +198,15 @@ class Reservation(models.Model):
     variant = models.ForeignKey("catalog.Variant", on_delete=models.CASCADE)
     warehouse = models.ForeignKey("inventory.Warehouse", on_delete=models.CASCADE)
     quantity = models.IntegerField(validators=[MinValueValidator(1)])
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+
     expires_at = models.DateTimeField(null=True, blank=True)
+
     order = models.ForeignKey(
         Order,
         on_delete=models.SET_NULL,
@@ -206,6 +214,7 @@ class Reservation(models.Model):
         blank=True,
         related_name="reservations",
     )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -223,12 +232,10 @@ class Reservation(models.Model):
 
     @property
     def is_expired(self):
-        if not self.expires_at:
-            return False
-        return self.expires_at < timezone.now()
+        return bool(self.expires_at and self.expires_at < timezone.now())
 
     def save(self, *args, **kwargs):
         """Ensure token is always set."""
-        if not self.reservation_token or self.reservation_token.strip() == "":
+        if not self.reservation_token or not self.reservation_token.strip():
             self.reservation_token = generate_reservation_token()
         super().save(*args, **kwargs)

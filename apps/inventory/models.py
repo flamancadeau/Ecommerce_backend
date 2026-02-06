@@ -30,10 +30,22 @@ class Warehouse(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.code:
-            last_warehouse = Warehouse.objects.order_by("id").last()
-            if last_warehouse and last_warehouse.code.startswith("WH"):
-                last_number = int(last_warehouse.code.replace("WH", ""))
-                self.code = f"WH{last_number + 1:03d}"
+
+            last_warehouse = (
+                Warehouse.objects.filter(code__startswith="WH")
+                .order_by("-code")
+                .first()
+            )
+            if last_warehouse:
+                try:
+                    num_part = last_warehouse.code[2:]
+                    last_number = int(num_part)
+                    self.code = f"WH{last_number + 1:03d}"
+                except (ValueError, TypeError):
+
+                    import secrets
+
+                    self.code = f"WH-{secrets.token_hex(4).upper()}"
             else:
                 self.code = "WH001"
         super().save(*args, **kwargs)
@@ -84,23 +96,30 @@ class Stock(models.Model):
 
 
 class InboundShipment(models.Model):
-    STATUS_CHOICES = [
-        ("pending", "Pending"),
-        ("in_transit", "In Transit"),
-        ("arrived", "Arrived at Warehouse"),
-        ("partial", "Partially Received"),
-        ("received", "Fully Received"),
-        ("cancelled", "Cancelled"),
-        ("delayed", "Delayed"),
-    ]
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        IN_TRANSIT = "in_transit", "In Transit"
+        ARRIVED = "arrived", "Arrived at Warehouse"
+        PARTIAL = "partial", "Partially Received"
+        RECEIVED = "received", "Fully Received"
+        CANCELLED = "cancelled", "Cancelled"
+        DELAYED = "delayed", "Delayed"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     reference = models.CharField(max_length=50, unique=True, blank=True)
     supplier = models.CharField(max_length=200, blank=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+
     expected_at = models.DateTimeField(null=True, blank=True)
     received_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -117,17 +136,30 @@ class InboundShipment(models.Model):
 
     @property
     def is_overdue(self):
-
-        if self.expected_at and self.status in ["pending", "in_transit"]:
-            return self.expected_at < timezone.now()
-        return False
+        return (
+            self.expected_at
+            and self.status in {self.Status.PENDING, self.Status.IN_TRANSIT}
+            and self.expected_at < timezone.now()
+        )
 
     def save(self, *args, **kwargs):
         if not self.reference:
-            last_shipment = InboundShipment.objects.order_by("id").last()
-            if last_shipment and last_shipment.reference.startswith("INB"):
-                last_number = int(last_shipment.reference.replace("INB", ""))
-                self.reference = f"INB{last_number + 1:03d}"
+
+            last_shipment = (
+                InboundShipment.objects.filter(reference__startswith="INB")
+                .order_by("-reference")
+                .first()
+            )
+            if last_shipment:
+                try:
+                    num_part = last_shipment.reference[3:]
+                    last_number = int(num_part)
+                    self.reference = f"INB{last_number + 1:03d}"
+                except (ValueError, TypeError):
+
+                    import secrets
+
+                    self.reference = f"INB-{timezone.now().strftime('%Y%p%d')}-{secrets.token_hex(3).upper()}"
             else:
                 self.reference = "INB001"
         super().save(*args, **kwargs)
@@ -149,6 +181,7 @@ class InboundItem(models.Model):
     unit_cost = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
+    received_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)
 
     class Meta:

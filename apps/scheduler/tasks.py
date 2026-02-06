@@ -1,11 +1,12 @@
-from functools import cache
+from django.core.cache import cache
 from django.db.models import F
 from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
 import logging
 
-from .models import ScheduledJob, IdempotencyKey
+from .models import ScheduledJob
+from apps.audit.models import IdempotencyKey
 
 logger = logging.getLogger(__name__)
 

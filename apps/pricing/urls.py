@@ -8,8 +8,8 @@ router.register(r"price-book-entries", views.PriceBookEntryViewSet)
 router.register(r"tax-rates", views.TaxRateViewSet)
 
 urlpatterns = [
-    path("", include(router.urls)),
-    # Pricing Engine endpoints
+    path("api/v1/", include(router.urls)),
     path("quote/", views.price_quote, name="price-quote"),
     path("explain/", views.explain_price, name="explain-price"),
 ]
+

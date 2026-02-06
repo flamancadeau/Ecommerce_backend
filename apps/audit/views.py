@@ -65,56 +65,14 @@ class PriceAuditViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def _export_csv(self, queryset, start_date, end_date):
-        """Export price audits as CSV"""
-        response = HttpResponse(content_type="text/csv")
+        """Export price audits using service"""
+        from .services import AuditService
+
+        csv_data = AuditService.export_price_audits_csv(queryset)
+        response = HttpResponse(csv_data, content_type="text/csv")
         response["Content-Disposition"] = (
             f'attachment; filename="price_audits_{start_date}_{end_date}.csv"'
         )
-
-        writer = csv.writer(response)
-        writer.writerow(
-            [
-                "SKU",
-                "Price Book",
-                "Old Price",
-                "New Price",
-                "Currency",
-                "Change Amount",
-                "Change %",
-                "Reason",
-                "Changed At",
-                "Changed By",
-            ]
-        )
-
-        for audit in queryset:
-            writer.writerow(
-                [
-                    audit.variant.sku if audit.variant else "N/A",
-                    audit.price_book.code if audit.price_book else "N/A",
-                    audit.old_price,
-                    audit.new_price,
-                    audit.currency,
-                    (
-                        audit.new_price - audit.old_price
-                        if audit.old_price and audit.new_price
-                        else ""
-                    ),
-                    (
-                        f"{((audit.new_price - audit.old_price) / audit.old_price * 100):.2f}%"
-                        if audit.old_price and audit.new_price and audit.old_price != 0
-                        else ""
-                    ),
-                    audit.reason or "",
-                    (
-                        audit.changed_at.strftime("%Y-%m-%d %H:%M:%S")
-                        if audit.changed_at
-                        else ""
-                    ),
-                    str(audit.changed_by)[:8] if audit.changed_by else "System",
-                ]
-            )
-
         return response
 
 
@@ -168,46 +126,14 @@ class InventoryAuditViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def _export_csv(self, queryset, start_date, end_date):
-        """Export inventory audits as CSV"""
-        response = HttpResponse(content_type="text/csv")
+        """Export inventory audits using service"""
+        from .services import AuditService
+
+        csv_data = AuditService.export_inventory_audits_csv(queryset)
+        response = HttpResponse(csv_data, content_type="text/csv")
         response["Content-Disposition"] = (
             f'attachment; filename="inventory_audits_{start_date}_{end_date}.csv"'
         )
-
-        writer = csv.writer(response)
-        writer.writerow(
-            [
-                "Event Type",
-                "SKU",
-                "Warehouse",
-                "Quantity",
-                "From Quantity",
-                "To Quantity",
-                "Reference",
-                "Notes",
-                "Created At",
-            ]
-        )
-
-        for audit in queryset:
-            writer.writerow(
-                [
-                    audit.event_type,
-                    audit.variant.sku if audit.variant else "N/A",
-                    audit.warehouse.code if audit.warehouse else "N/A",
-                    audit.quantity,
-                    audit.from_quantity or "",
-                    audit.to_quantity or "",
-                    audit.reference or "",
-                    audit.notes or "",
-                    (
-                        audit.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                        if audit.created_at
-                        else ""
-                    ),
-                ]
-            )
-
         return response
 
 
