@@ -16,12 +16,13 @@ from drf_yasg import openapi
 
 from .models import PriceBook, PriceBookEntry, TaxRate
 from apps.audit.models import PriceAudit
+from apps.catalog.models import Variant
 from .serializers import (
     PriceBookSerializer,
     PriceBookEntrySerializer,
     TaxRateSerializer,
     PriceQuoteRequestSerializer,
-    ExplainPriceQuerySerializer,
+    PriceExplainRequestSerializer,
 )
 
 
@@ -232,26 +233,47 @@ class TaxRateViewSet(viewsets.ModelViewSet):
         return self.perform_destroy(instance)
 
 
+@swagger_auto_schema(
+    method="post",
+    request_body=PriceQuoteRequestSerializer,
+    responses={
+        200: openapi.Response(
+            description="Price calculation successful",
+            schema=openapi.Schema(type=openapi.TYPE_OBJECT),
+        ),
+        400: "Invalid request data",
+    },
+)
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def price_quote(request):
+    """
+    Calculate price for a list of items based on customer context and time.
+    """
+    serializer = PriceQuoteRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(
+            {
+                "status": False,
+                "message": "Invalid request data",
+                "errors": serializer.errors,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     try:
-        data = request.data
-
-        at_time = parse_timestamp(data.get("at"))
-
-        customer_context = data.get("customer_context", {})
-
-        items_data = data.get("items", [])
+        validated_data = serializer.validated_data
+        at_time = validated_data.get("at") or timezone.now()
+        customer_context = validated_data.get("customer_context", {})
+        items_data = validated_data.get("items", [])
         results = []
 
         for item in items_data:
-            item_result = calculate_item_price(
-                variant_id=item["variant_id"],
+            item_result = PriceBook.objects.calculate_price(
+                variant=get_object_or_404(Variant, id=item["variant_id"]),
                 quantity=item["quantity"],
                 at_time=at_time,
-                customer_context=customer_context,
+                context=customer_context,
             )
             results.append(item_result)
 
@@ -270,7 +292,7 @@ def price_quote(request):
                 "status": True,
                 "message": "Price calculated successfully",
                 "data": {
-                    "calculated_at": data["at"],
+                    "calculated_at": at_time.isoformat(),
                     "customer_context": customer_context,
                     "items": results,
                     "summary": summary,
@@ -290,42 +312,142 @@ def price_quote(request):
 
 
 @swagger_auto_schema(
-    method="get",
-    query_serializer=ExplainPriceQuerySerializer,
+    method="post",
+    request_body=PriceExplainRequestSerializer,
     responses={
         200: openapi.Response(
-            description="Price explanation",
+            description="Price explanation generated",
             schema=openapi.Schema(type=openapi.TYPE_OBJECT),
-        )
+        ),
+        400: "Invalid request data",
     },
 )
-@api_view(["GET"])
+@api_view(["POST"])
 @permission_classes([AllowAny])
 def explain_price(request):
+    """
+    Generate a detailed explanation of how a price was calculated for a variant.
+    """
+    serializer = PriceExplainRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(
+            {
+                "status": False,
+                "message": "Invalid request data",
+                "errors": serializer.errors,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     try:
-        variant_id = request.GET.get("variant_id")
-        at_time = parse_timestamp(request.GET.get("at"))
-        context_str = request.GET.get("context", "{}")
-        quantity = int(request.GET.get("quantity", 1))
+        validated_data = serializer.validated_data
+        variant_id = validated_data["variant_id"]
+        at_time = validated_data.get("at") or timezone.now()
+        quantity = validated_data.get("quantity", 1)
+        customer_context = validated_data.get("customer_context", {})
 
-        customer_context = json.loads(context_str)
-
-        from apps.catalog.models import Variant
+        from apps.promotions.models import Campaign
 
         variant = get_object_or_404(Variant, id=variant_id)
 
-        base_price = get_base_price(variant, customer_context, at_time)
-        campaigns = get_applicable_campaigns(
-            variant, customer_context, at_time, quantity
-        )
-        tax_rate = get_tax_rate(
-            customer_context.get("country", "DE"), variant.tax_class, at_time
+        # Use the central calculation logic
+        final_calculation = PriceBook.objects.calculate_price(
+            variant, customer_context, quantity, at_time
         )
 
-        final_calculation = calculate_item_price(
-            variant_id, quantity, at_time, customer_context
+        checks = []
+        possible_entries = PriceBookEntry.objects.filter(
+            Q(variant=variant)
+            | Q(product=variant.product)
+            | Q(category=variant.product.category)
+        ).select_related("price_book")
+
+        customer_currency = customer_context.get("currency", "EUR")
+        customer_country = customer_context.get("country", "")
+        customer_channel = customer_context.get("channel", "web")
+        customer_membership = customer_context.get("membership_tier", "retail")
+
+        for entry in possible_entries:
+            pb = entry.price_book
+            mismatches = []
+
+            if not pb.is_active:
+                mismatches.append("Price Book is inactive")
+            if pb.currency != customer_currency:
+                mismatches.append(f"Currency ({pb.currency} != {customer_currency})")
+            if pb.country and pb.country != customer_country:
+                mismatches.append(f"Country ({pb.country} != {customer_country})")
+            if pb.channel and pb.channel != customer_channel:
+                mismatches.append(f"Channel ({pb.channel} != {customer_channel})")
+            if pb.customer_group and pb.customer_group != customer_membership:
+                mismatches.append(
+                    f"Group ({pb.customer_group} != {customer_membership})"
+                )
+
+            if entry.effective_from and entry.effective_from > at_time:
+                mismatches.append(f"Not effective yet (Starts {entry.effective_from})")
+            if entry.effective_to and entry.effective_to < at_time:
+                mismatches.append(f"Expired (Ended {entry.effective_to})")
+
+            if entry.min_quantity > quantity:
+                mismatches.append(
+                    f"Quantity too low (Need {entry.min_quantity}, have {quantity})"
+                )
+            if entry.max_quantity and entry.max_quantity < quantity:
+                mismatches.append(
+                    f"Quantity too high (Max {entry.max_quantity}, have {quantity})"
+                )
+
+            checks.append(
+                {
+                    "code": pb.code,
+                    "name": pb.name,
+                    "price": float(entry.price),
+                    "is_eligible": len(mismatches) == 0,
+                    "mismatches": mismatches,
+                    "level": (
+                        "variant"
+                        if entry.variant
+                        else ("product" if entry.product else "category")
+                    ),
+                }
+            )
+
+        campaign_checks = []
+        potential_campaigns = Campaign.objects.filter(
+            end_at__gte=at_time - timezone.timedelta(days=1)
         )
+
+        for campaign in potential_campaigns:
+            c_mismatches = []
+            if not campaign.is_active:
+                c_mismatches.append("Campaign is disabled (is_active=False)")
+            if campaign.start_at > at_time:
+                c_mismatches.append(f"Scheduled for future ({campaign.start_at})")
+            if campaign.end_at < at_time:
+                c_mismatches.append(f"Already expired ({campaign.end_at})")
+
+            # Check eligibility using campaign model methods
+            if not campaign.is_customer_eligible(customer_context):
+                c_mismatches.append(
+                    f"Customer group not eligible. Allowed: {campaign.customer_groups}"
+                )
+
+            if not campaign.applies_to_variant(variant):
+                c_mismatches.append("Product/Brand rules do not match this variant")
+
+            if not campaign.meets_quantity_requirements(quantity):
+                c_mismatches.append("Quantity requirements not met")
+
+            campaign_checks.append(
+                {
+                    "code": campaign.code,
+                    "name": campaign.name,
+                    "is_eligible": len(c_mismatches) == 0,
+                    "mismatches": c_mismatches,
+                    "priority": campaign.priority,
+                }
+            )
 
         explanation = {
             "variant": {
@@ -335,35 +457,23 @@ def explain_price(request):
                 "tax_class": variant.tax_class,
             },
             "calculated_at": at_time.isoformat(),
-            "customer_context": customer_context,
-            "base_price_used": float(base_price),
-            "tax_rate_used": float(tax_rate),
-            "campaigns_considered": [
-                {
-                    "id": str(campaign.id),
-                    "code": campaign.code,
-                    "name": campaign.name,
-                    "priority": campaign.priority,
-                    "stackable": campaign.stacking_type != "none",
-                    "start_at": campaign.start_at.isoformat(),
-                    "end_at": campaign.end_at.isoformat(),
-                }
-                for campaign in campaigns
-            ],
-            "price_books_checked": list(
-                PriceBookEntry.objects.filter(
-                    variant=variant,
-                    effective_from__lte=at_time,
-                    effective_to__gte=at_time,
-                ).values("price_book__code", "price_book__name", "price")
-            ),
+            "customer_context": {
+                "currency": customer_currency,
+                "country": customer_country,
+                "channel": customer_channel,
+                "membership_tier": customer_membership,
+            },
+            "base_price_used": final_calculation.get("base_price"),
+            "tax_rate_used": final_calculation.get("tax_rate"),
+            "price_books_analysis": checks,
+            "campaigns_analysis": campaign_checks,
             "final_calculation": final_calculation,
         }
 
         return Response(
             {
                 "status": True,
-                "message": "Price explanation generated",
+                "message": "Price explanation generated with troubleshooting diagnostics",
                 "data": explanation,
             }
         )
@@ -382,334 +492,10 @@ def explain_price(request):
 def parse_timestamp(timestamp_str):
     """Parse timestamp string to datetime object."""
     try:
-
+        if not timestamp_str:
+            return timezone.now()
         if timestamp_str.endswith("Z"):
             timestamp_str = timestamp_str[:-1] + "+00:00"
         return datetime.fromisoformat(timestamp_str)
     except:
-
         return timezone.now()
-
-
-def calculate_item_price(variant_id, quantity, at_time, customer_context):
-    """
-    Calculate price for a single variant.
-    """
-    from apps.catalog.models import Variant
-    from apps.promotions.models import Campaign, CampaignRule, CampaignDiscount
-
-    variant = get_object_or_404(Variant, id=variant_id)
-
-    base_price = get_base_price(variant, customer_context, at_time)
-
-    applicable_campaigns = get_applicable_campaigns(
-        variant=variant,
-        customer_context=customer_context,
-        at_time=at_time,
-        quantity=quantity,
-    )
-
-    discount_amount = Decimal("0")
-    applied_campaigns = []
-
-    applicable_campaigns.sort(key=lambda x: x.priority, reverse=True)
-
-    # Track if we can continue stacking
-    can_stack = True
-
-    for campaign in applicable_campaigns:
-
-        if not can_stack:
-            break
-
-        is_exclusive = (
-            campaign.stacking_type == "none" or campaign.stacking_type == "exclusive"
-        )
-
-        if applied_campaigns and is_exclusive:
-            continue
-
-        campaign_discount = calculate_campaign_discount(
-            campaign=campaign, base_price=base_price, quantity=quantity
-        )
-
-        if campaign_discount > 0:
-            discount_amount += campaign_discount
-            applied_campaigns.append(
-                {
-                    "campaign_id": str(campaign.id),
-                    "code": campaign.code,
-                    "name": campaign.name,
-                    "discount_amount": float(campaign_discount),
-                    "discount_type": (
-                        campaign.discounts.first().discount_type
-                        if campaign.discounts.exists()
-                        else "unknown"
-                    ),
-                    "priority": campaign.priority,
-                }
-            )
-
-            if is_exclusive:
-                can_stack = False
-                break
-
-    final_price = base_price - discount_amount
-
-    if final_price < Decimal("0"):
-        final_price = Decimal("0")
-        discount_amount = base_price
-
-    tax_rate = get_tax_rate(
-        country=customer_context.get("country", "DE"),
-        tax_class=variant.tax_class,
-        at_time=at_time,
-    )
-
-    tax_amount = final_price * tax_rate
-
-    final_price = final_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    tax_amount = tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    extended_price = final_price * quantity
-    total_tax = tax_amount * quantity
-    total_price = (final_price + tax_amount) * quantity
-
-    availability = check_availability(variant, quantity)
-
-    price_book_info = get_price_book_info(variant, customer_context, at_time)
-
-    return {
-        "variant_id": str(variant.id),
-        "sku": variant.sku,
-        "product_name": variant.product.name,
-        "attributes": variant.attributes,
-        "quantity": quantity,
-        "base_price": float(base_price),
-        "final_unit_price": float(final_price),
-        "discount_amount": float(discount_amount),
-        "extended_price": float(extended_price),
-        "tax_rate": float(tax_rate),
-        "tax_amount": float(tax_amount),
-        "total_tax": float(total_tax),
-        "total_price": float(total_price),
-        "applied_campaigns": applied_campaigns,
-        "availability": availability,
-        "price_book_used": price_book_info,
-    }
-
-
-def get_base_price(variant, customer_context, at_time):
-    """
-    Get base price from price book or variant.
-    Priority: PriceBookEntry > Variant base_price
-    """
-
-    price_entry = (
-        PriceBookEntry.objects.filter(
-            Q(variant=variant)
-            | Q(product=variant.product)
-            | Q(category=variant.product.category),
-            price_book__currency=customer_context.get("currency", "EUR"),
-            price_book__country=customer_context.get("country", ""),
-            price_book__channel=customer_context.get("channel", ""),
-            price_book__customer_group=customer_context.get(
-                "membership_tier", "retail"
-            ),
-            effective_from__lte=at_time,
-            effective_to__gte=at_time,
-            price_book__is_active=True,
-        )
-        .order_by(
-            "variant",
-            "product",
-            "category",
-        )
-        .first()
-    )
-
-    if price_entry:
-        return price_entry.price
-
-    return variant.base_price
-
-
-def get_applicable_campaigns(variant, customer_context, at_time, quantity):
-    """
-    Get all campaigns that apply to this variant.
-    """
-    from apps.promotions.models import Campaign, CampaignRule
-
-    campaigns = Campaign.objects.filter(
-        start_at__lte=at_time, end_at__gte=at_time, is_active=True
-    )
-
-    applicable = []
-
-    for campaign in campaigns:
-
-        if not is_customer_eligible(campaign, customer_context):
-            continue
-
-        if not does_campaign_apply(campaign, variant):
-            continue
-
-        if not meets_quantity_requirements(campaign, quantity):
-            continue
-
-        applicable.append(campaign)
-
-    return applicable
-
-
-def is_customer_eligible(campaign, customer_context):
-    """Check if customer is eligible for campaign."""
-
-    if campaign.customer_groups:
-        customer_group = customer_context.get("membership_tier", "standard")
-        if customer_group not in campaign.customer_groups:
-            return False
-
-    if campaign.excluded_customer_groups:
-        customer_group = customer_context.get("membership_tier", "standard")
-        if customer_group in campaign.excluded_customer_groups:
-            return False
-
-    if campaign.min_order_amount:
-
-        pass
-
-    return True
-
-
-def does_campaign_apply(campaign, variant):
-    """Check if campaign applies to variant based on rules."""
-    rules = campaign.rules.all()
-
-    if not rules.exists():
-        return True
-
-    for rule in rules:
-        if rule.rule_type == "product":
-            if rule.value == str(variant.product.id) and rule.scope == "include":
-                return True
-            elif rule.value == str(variant.product.id) and rule.scope == "exclude":
-                return False
-
-        elif rule.rule_type == "variant":
-            if rule.value == str(variant.id) and rule.scope == "include":
-                return True
-            elif rule.value == str(variant.id) and rule.scope == "exclude":
-                return False
-
-        elif rule.rule_type == "category":
-            if variant.product.category and rule.value == str(
-                variant.product.category.id
-            ):
-                return rule.scope == "include"
-
-        elif rule.rule_type == "brand":
-            if rule.value == variant.product.brand:
-                return rule.scope == "include"
-
-        elif rule.rule_type == "attribute":
-            attr_key, attr_value = rule.value.split(":", 1)
-            if variant.attributes.get(attr_key) == attr_value:
-                return rule.scope == "include"
-
-    return False
-
-
-def meets_quantity_requirements(campaign, quantity):
-    """Check if quantity meets campaign requirements."""
-    discount = campaign.discounts.first()
-    if not discount:
-        return True
-
-    if quantity < discount.min_quantity:
-        return False
-
-    if discount.max_quantity and quantity > discount.max_quantity:
-        return False
-
-    return True
-
-
-def calculate_campaign_discount(campaign, base_price, quantity):
-    """Calculate discount amount from campaign."""
-    discount = campaign.discounts.first()
-    if not discount:
-        return Decimal("0")
-
-    if discount.discount_type == "percentage":
-        amount = base_price * (discount.value / Decimal("100"))
-    elif discount.discount_type == "fixed_amount":
-        amount = discount.value
-    elif discount.discount_type == "price_override":
-        amount = max(base_price - discount.value, Decimal("0"))
-    else:
-        amount = Decimal("0")
-
-    if discount.max_discount_amount:
-        amount = min(amount, discount.max_discount_amount)
-
-    if discount.min_price:
-        final_price = max(base_price - amount, discount.min_price)
-        amount = base_price - final_price
-
-    return amount
-
-
-def get_tax_rate(country, tax_class, at_time):
-    """Get tax rate for country and tax class at specific time."""
-    tax_rate = TaxRate.objects.filter(
-        country=country,
-        tax_class=tax_class,
-        effective_from__lte=at_time.date(),
-        effective_to__gte=at_time.date(),
-        is_active=True,
-    ).first()
-
-    return tax_rate.rate if tax_rate else Decimal("0.19")
-
-
-def get_price_book_info(variant, customer_context, at_time):
-    """Get which price book was used."""
-    price_entry = PriceBookEntry.objects.filter(
-        variant=variant,
-        price_book__currency=customer_context.get("currency", "EUR"),
-        effective_from__lte=at_time,
-        effective_to__gte=at_time,
-    ).first()
-
-    if price_entry:
-        return {
-            "price_book": price_entry.price_book.code,
-            "price_book_name": price_entry.price_book.name,
-            "price": float(price_entry.price),
-        }
-    return None
-
-
-def check_availability(variant, quantity):
-    """Check if variant is available."""
-    from apps.inventory.models import Stock
-
-    total_available = sum(
-        stock.available for stock in Stock.objects.filter(variant=variant)
-    )
-
-    if total_available >= quantity:
-        return {
-            "available": True,
-            "message": "In stock",
-            "available_quantity": total_available,
-        }
-    else:
-        return {
-            "available": False,
-            "message": "Out of stock",
-            "available_quantity": total_available,
-            "backorderable": any(
-                stock.backorderable for stock in Stock.objects.filter(variant=variant)
-            ),
-        }

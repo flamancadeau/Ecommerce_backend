@@ -1,0 +1,26 @@
+INSTALLED_APPS = [
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "rest_framework.authtoken",
+    # Third party apps
+    "rest_framework",
+    "django_filters",
+    "django_celery_beat",
+    "safedelete",
+    "timezone_field",
+    "drf_yasg",
+    "corsheaders",
+    "django_extensions",
+    # Local apps
+    "apps.catalog",
+    "apps.inventory",
+    "apps.pricing",
+    "apps.promotions",
+    "apps.orders",
+    "apps.audit",
+    "apps.scheduler",
+]

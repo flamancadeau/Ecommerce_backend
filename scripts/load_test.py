@@ -2,12 +2,10 @@ import os
 import django
 import sys
 import threading
-import time
 import requests
 import json
 from decimal import Decimal
 
-# Setup Django standalone
 sys.path.append(os.getcwd())
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ecommerce.settings.development")
 django.setup()

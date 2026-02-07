@@ -12,10 +12,9 @@ class CartItemInline(admin.TabularInline):
     readonly_fields = ("variant", "unit_price", "total_price_display", "added_at")
     fields = ("variant", "quantity", "unit_price", "total_price_display", "added_at")
 
+    @admin.display(description="Total Price")
     def total_price_display(self, obj):
-        return format_html("<strong>€{}</strong>", format(obj.total_price, ".2f"))
-
-    total_price_display.short_description = "Total Price"
+        return f"€{obj.total_price:.2f}"
 
 
 @admin.register(Cart)
@@ -64,50 +63,30 @@ class CartAdmin(admin.ModelAdmin):
             )
         return queryset, use_distinct
 
+    @admin.display(description="ID")
     def id_short(self, obj):
         return str(obj.id)[:8]
 
-    id_short.short_description = "ID"
-
+    @admin.display(description="Owner")
     def owner_display(self, obj):
         if obj.user_id:
-            return format_html(
-                '<span style="color: green;">👤 User: {}</span>', str(obj.user_id)[:8]
-            )
+            return f"User: {str(obj.user_id)[:8]}"
         elif obj.session_id:
-            return format_html(
-                '<span style="color: gray;">🔒 Session: {}...</span>',
-                obj.session_id[:20],
-            )
-        return format_html('<span style="color: red;">⚠️ Anonymous</span>')
+            return f"Session: {obj.session_id[:20]}..."
+        return "Anonymous"
 
-    owner_display.short_description = "Owner"
-
+    @admin.display(description="Items")
     def item_count_display(self, obj):
         count = obj.item_count
-        if count == 0:
-            return format_html('<span style="color: gray;">0 items</span>')
-        return format_html(
-            "<strong>{} item{}</strong>", count, "s" if count != 1 else ""
-        )
+        return f"{count} item{'s' if count != 1 else ''}"
 
-    item_count_display.short_description = "Items"
-
+    @admin.display(description="Total Value")
     def total_value_display(self, obj):
-        total = obj.total_value
-        if total == 0:
-            return format_html('<span style="color: gray;">€0.00</span>')
-        return format_html(
-            '<strong style="color: green;">€{}</strong>', format(total, ".2f")
-        )
+        return f"€{obj.total_value:.2f}"
 
-    total_value_display.short_description = "Total Value"
-
+    @admin.display(description="Expired", boolean=True)
     def is_expired_display(self, obj):
         return obj.is_expired
-
-    is_expired_display.boolean = True
-    is_expired_display.short_description = "Expired"
 
 
 class OrderItemInline(admin.TabularInline):
@@ -136,10 +115,9 @@ class OrderItemInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None):
         return False
 
+    @admin.display(description="Total")
     def total_price_display(self, obj):
-        return format_html("€{}", format(obj.total_price, ".2f"))
-
-    total_price_display.short_description = "Total"
+        return f"€{obj.total_price:.2f}"
 
 
 @admin.register(Order)
@@ -200,54 +178,27 @@ class OrderAdmin(admin.ModelAdmin):
     date_hierarchy = "created_at"
     actions = ["cancel_selected_orders"]
 
+    @admin.display(description="Status")
     def status_display(self, obj):
-        colors = {
-            "draft": "gray",
-            "pending": "orange",
-            "confirmed": "blue",
-            "processing": "purple",
-            "shipped": "green",
-            "delivered": "darkgreen",
-            "cancelled": "red",
-        }
-        color = colors.get(obj.status, "black")
-        return format_html(
-            '<span style="color: {}; font-weight: bold;">{}</span>',
-            color,
-            obj.get_status_display(),
-        )
+        return obj.get_status_display()
 
-    status_display.short_description = "Status"
-
+    @admin.display(description="Items")
     def item_count_display(self, obj):
         count = obj.item_count
-        return format_html(
-            "<strong>{} item{}</strong>", count, "s" if count != 1 else ""
-        )
+        return f"{count} item{'s' if count != 1 else ''}"
 
-    item_count_display.short_description = "Items"
-
+    @admin.display(description="Total")
     def total_display(self, obj):
-        if obj.total is None:
-            return format_html('<span style="color: gray;">€0.00</span>')
-        return format_html(
-            '<strong style="color: green;">€{}</strong>', format(obj.total, ".2f")
-        )
+        return f"€{obj.total:.2f}" if obj.total else "€0.00"
 
-    total_display.short_description = "Total"
-
+    @admin.action(description="Cancel selected orders")
     def cancel_selected_orders(self, request, queryset):
-        cancelled_count = 0
-        for order in queryset:
-            if order.status in ["draft", "pending", "confirmed"]:
-                order.status = "cancelled"
-                order.save()
-                cancelled_count += 1
+        cancelled_count = queryset.filter(
+            status__in=["draft", "pending", "confirmed"]
+        ).update(status="cancelled")
         self.message_user(
             request, f"{cancelled_count} order(s) were successfully cancelled."
         )
-
-    cancel_selected_orders.short_description = "Cancel selected orders"
 
 
 @admin.register(Reservation)
@@ -294,69 +245,46 @@ class ReservationAdmin(admin.ModelAdmin):
     def get_readonly_fields(self, request, obj=None):
         if obj:
             return self.readonly_fields
-        else:
-            return self.readonly_fields + ("reservation_token",)
+        return self.readonly_fields + ("reservation_token",)
 
+    @admin.display(description="Token")
     def token_short(self, obj):
-        if obj.reservation_token:
-            return f"{obj.reservation_token[:20]}..."
-        return "-"
+        return f"{obj.reservation_token[:20]}..." if obj.reservation_token else "-"
 
-    token_short.short_description = "Token"
-
+    @admin.display(description="SKU")
     def variant_sku(self, obj):
         return obj.variant.sku if obj.variant else "-"
 
-    variant_sku.short_description = "SKU"
-
+    @admin.display(description="Warehouse")
     def warehouse_code(self, obj):
         return obj.warehouse.code if obj.warehouse else "-"
 
-    warehouse_code.short_description = "Warehouse"
-
+    @admin.display(description="Status")
     def status_display(self, obj):
-        colors = {
-            "pending": "orange",
-            "confirmed": "green",
-            "expired": "red",
-            "cancelled": "darkred",
-        }
-        color = colors.get(obj.status, "black")
-        return format_html(
-            '<span style="color: {}; font-weight: bold;">{}</span>',
-            color,
-            obj.get_status_display(),
-        )
+        return obj.get_status_display()
 
-    status_display.short_description = "Status"
-
+    @admin.display(description="Expired", boolean=True)
     def is_expired_display(self, obj):
         return obj.is_expired
 
-    is_expired_display.boolean = True
-    is_expired_display.short_description = "Expired"
-
+    @admin.display(description="Order")
     def order_link(self, obj):
         if obj.order:
             url = reverse("admin:orders_order_change", args=[obj.order.id])
             return format_html('<a href="{}">{}</a>', url, obj.order.order_number)
         return "-"
 
-    order_link.short_description = "Order"
-
+    @admin.action(description="Expire selected reservations")
     def expire_selected_reservations(self, request, queryset):
         updated = queryset.filter(status="pending").update(status="expired")
         self.message_user(request, f"{updated} reservation(s) were marked as expired.")
 
-    expire_selected_reservations.short_description = "Expire selected reservations"
-
+    @admin.action(description="Cancel selected reservations")
     def cancel_selected_reservations(self, request, queryset):
         updated = queryset.filter(status__in=["pending", "confirmed"]).update(
             status="cancelled"
         )
         self.message_user(request, f"{updated} reservation(s) were cancelled.")
-
-    cancel_selected_reservations.short_description = "Cancel selected reservations"
 
 
 @admin.register(CartItem)
@@ -389,31 +317,27 @@ class CartItemAdmin(admin.ModelAdmin):
         "updated_at",
     )
 
+    @admin.display(description="ID")
     def id_short(self, obj):
         return str(obj.id)[:8]
 
-    id_short.short_description = "ID"
-
+    @admin.display(description="Cart")
     def cart_link(self, obj):
         url = reverse("admin:orders_cart_change", args=[obj.cart.id])
         return format_html('<a href="{}">{}</a>', url, str(obj.cart.id)[:8])
 
-    cart_link.short_description = "Cart"
-
+    @admin.display(description="SKU")
     def variant_sku(self, obj):
         return obj.variant.sku if obj.variant else "-"
 
-    variant_sku.short_description = "SKU"
-
+    @admin.display(description="Total")
     def total_price_display(self, obj):
-        return format_html("€{}", format(obj.total_price, ".2f"))
-
-    total_price_display.short_description = "Total"
+        return f"€{obj.total_price:.2f}"
 
     def save_model(self, request, obj, form, change):
         if not change or "variant" in form.changed_data:
             if obj.variant and (
-                obj.unit_price == Decimal("0.00") or not obj.unit_price
+                not obj.unit_price or obj.unit_price == Decimal("0.00")
             ):
                 obj.unit_price = obj.variant.base_price
         super().save_model(request, obj, form, change)

@@ -10,10 +10,13 @@ from django.db.models import Sum
 from apps.audit.models import InventoryAudit
 from apps.audit.idempotency import idempotent_request
 from apps.catalog.models import Variant
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 from .serializers import (
     WarehouseSerializer,
     StockSerializer,
     InboundShipmentSerializer,
+    InboundShipmentWriteSerializer,
     InboundItemSerializer,
 )
 
@@ -172,9 +175,42 @@ class StockViewSet(_BaseViewSet):
 
         return queryset
 
+    @swagger_auto_schema(
+        operation_description="Manual adjustment of stock levels.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["variant", "warehouse", "quantity"],
+            properties={
+                "variant": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="The UUID of the variant.",
+                ),
+                "warehouse": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="The UUID of the warehouse.",
+                ),
+                "quantity": openapi.Schema(
+                    type=openapi.TYPE_INTEGER,
+                    description="The quantity to add (positive) or subtract (negative).",
+                ),
+                "reason": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description="The reason for the adjustment.",
+                    default="Manual adjustment",
+                ),
+            },
+        ),
+        responses={
+            200: openapi.Response(
+                description="Stock adjusted successfully", schema=StockSerializer
+            ),
+            400: openapi.Response(description="Bad request"),
+        },
+    )
     @action(detail=False, methods=["post"], url_path="adjust")
     @idempotent_request()
-    @transaction.atomic
     def adjust(self, request):
         """Manual adjustment of stock."""
         variant_id = request.data.get("variant")
@@ -188,25 +224,11 @@ class StockViewSet(_BaseViewSet):
                 status=400,
             )
 
-        stock, created = Stock.objects.select_for_update().get_or_create(
-            variant_id=variant_id, warehouse_id=warehouse_id
-        )
-
-        old_qty = stock.on_hand
-        stock.on_hand += quantity
-        stock.save()
-
-        InventoryAudit.objects.create(
-            event_type="adjustment",
-            variant_id=variant_id,
-            warehouse_id=warehouse_id,
-            quantity=quantity,
-            from_quantity=old_qty,
-            to_quantity=stock.on_hand,
-            notes=reason,
-        )
-
-        return Response({"success": True, "data": StockSerializer(stock).data})
+        try:
+            stock = Stock.objects.adjust(variant_id, warehouse_id, quantity, reason)
+            return Response({"success": True, "data": StockSerializer(stock).data})
+        except Exception as e:
+            return Response({"success": False, "message": str(e)}, status=400)
 
     @action(
         detail=False, methods=["get"], url_path="variant-status/(?P<variant_id>[^/.]+)"
@@ -229,41 +251,87 @@ class StockViewSet(_BaseViewSet):
         }
         return Response({"success": True, "data": data})
 
+    @swagger_auto_schema(
+        operation_description="Create or update stock record. If quantity is provided, it will be adjusted.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["variant", "warehouse"],
+            properties={
+                "variant": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="Variant UUID",
+                ),
+                "warehouse": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="Warehouse UUID",
+                ),
+                "quantity": openapi.Schema(
+                    type=openapi.TYPE_INTEGER,
+                    description="Optional: Quantity to adjust (can be positive or negative)",
+                ),
+                "reason": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description="Optional: Reason for adjustment",
+                    default="Manual adjustment",
+                ),
+                "backorderable": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                "backorder_limit": openapi.Schema(type=openapi.TYPE_INTEGER),
+                "safety_stock": openapi.Schema(type=openapi.TYPE_INTEGER),
+            },
+        ),
+        responses={
+            201: openapi.Response("Stock created/updated", StockSerializer),
+            400: "Bad Request",
+        },
+    )
     def create(self, request, *args, **kwargs):
 
         variant_id = request.data.get("variant")
         warehouse_id = request.data.get("warehouse")
+        quantity = request.data.get("quantity")
+        reason = request.data.get("reason", "Manual adjustment")
 
-        if variant_id and warehouse_id:
-            try:
+        if not variant_id or not warehouse_id:
+            return super().create(request, *args, **kwargs)
 
-                existing_stock = Stock.objects.get(
-                    variant_id=variant_id, warehouse_id=warehouse_id
-                )
+        try:
+            with transaction.atomic():
+                if quantity is not None:
 
-                serializer = self.get_serializer(
-                    existing_stock, data=request.data, partial=False
-                )
+                    stock = Stock.objects.adjust(
+                        variant_id, warehouse_id, int(quantity), reason
+                    )
+                else:
+
+                    stock, _ = Stock.objects.get_or_create(
+                        variant_id=variant_id, warehouse_id=warehouse_id
+                    )
+
+                serializer = self.get_serializer(stock, data=request.data, partial=True)
                 serializer.is_valid(raise_exception=True)
-                self.perform_update(serializer)
+                serializer.save()
+
                 return Response(
                     {
                         "success": True,
-                        "message": "Stock updated successfully!",
+                        "message": "Stock record processed successfully!",
                         "data": serializer.data,
                     },
                     status=status.HTTP_200_OK,
                 )
-            except Stock.DoesNotExist:
-
-                pass
-
-        return super().create(request, *args, **kwargs)
+        except Exception as e:
+            return Response({"success": False, "message": str(e)}, status=400)
 
 
 class InboundShipmentViewSet(_BaseViewSet):
     queryset = InboundShipment.objects.prefetch_related("items").all()
-    serializer_class = InboundShipmentSerializer
+
+    def get_serializer_class(self):
+        if self.action in ["create", "update", "partial_update"]:
+            return InboundShipmentWriteSerializer
+        return InboundShipmentSerializer
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -283,70 +351,71 @@ class InboundShipmentViewSet(_BaseViewSet):
 
         return queryset
 
+    @swagger_auto_schema(
+        operation_description="Receive items from an inbound shipment and update stock levels.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["items"],
+            properties={
+                "items": openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    description="List of items to receive",
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        required=["variant_id", "quantity"],
+                        properties={
+                            "variant_id": openapi.Schema(
+                                type=openapi.TYPE_STRING,
+                                format=openapi.FORMAT_UUID,
+                                description="The UUID of the variant being received",
+                            ),
+                            "quantity": openapi.Schema(
+                                type=openapi.TYPE_INTEGER,
+                                description="The quantity being received",
+                                minimum=1,
+                            ),
+                        },
+                    ),
+                ),
+            },
+        ),
+        responses={
+            200: openapi.Response(
+                description="Items received successfully",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "success": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        "message": openapi.Schema(type=openapi.TYPE_STRING),
+                    },
+                ),
+            ),
+            400: "Bad request - invalid data or shipment not found",
+        },
+    )
     @action(detail=True, methods=["post"], url_path="receive")
     @idempotent_request()
-    @transaction.atomic
     def receive(self, request, pk=None):
         """Receive items from an inbound shipment."""
-        shipment = self.get_object()
-        receipts = request.data.get(
-            "items", []
-        )  # List of {variant_id, received_quantity}
+        receipts = request.data.get("items", [])
 
         if not receipts:
             return Response(
                 {"success": False, "message": "No items provided"}, status=400
             )
 
-        for receipt in receipts:
-            variant_id = receipt.get("variant_id")
-            qty = int(receipt.get("quantity", 0))
-
-            if qty <= 0:
-                continue
-
-            try:
-                item = InboundItem.objects.get(inbound=shipment, variant_id=variant_id)
-                item.received_quantity += qty
-                item.save()
-
-                # Update stock
-                stock, _ = Stock.objects.select_for_update().get_or_create(
-                    variant_id=variant_id, warehouse=item.warehouse
-                )
-                old_qty = stock.on_hand
-                stock.on_hand += qty
-                stock.save()
-
-                InventoryAudit.objects.create(
-                    event_type="receipt",
-                    variant_id=variant_id,
-                    warehouse=item.warehouse,
-                    quantity=qty,
-                    from_quantity=old_qty,
-                    to_quantity=stock.on_hand,
-                    reference=shipment.reference,
-                )
-            except InboundItem.DoesNotExist:
-                return Response(
-                    {
-                        "success": False,
-                        "message": f"Variant {variant_id} not in this shipment",
-                    },
-                    status=400,
-                )
-
-        all_received = not shipment.items.filter(
-            received_quantity__lt=F("expected_quantity")
-        ).exists()
-        if all_received:
-            shipment.status = "received"
-            shipment.received_at = timezone.now()
-        else:
-            shipment.status = "partial"
-        shipment.save()
-
-        return Response({"success": True, "message": "Items received successfully"})
+        try:
+            shipment = InboundShipment.objects.receive_shipment(pk, receipts)
+            return Response(
+                {
+                    "success": True,
+                    "message": f"Items received successfully. Shipment status: {shipment.status}",
+                }
+            )
+        except ValueError as e:
+            return Response({"success": False, "message": str(e)}, status=400)
+        except Exception as e:
+            return Response({"success": False, "message": "Internal error"}, status=500)
 
 
 class InboundItemViewSet(_BaseViewSet):
@@ -354,6 +423,72 @@ class InboundItemViewSet(_BaseViewSet):
         "inbound", "variant", "warehouse"
     ).all()
     serializer_class = InboundItemSerializer
+
+    @swagger_auto_schema(
+        operation_description=(
+            "Manually add an item to an existing inbound shipment. "
+            "Note: Items are usually added when creating the shipment. "
+            "Use this endpoint only if you need to add items to an existing shipment."
+        ),
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["inbound", "variant", "warehouse", "expected_quantity"],
+            properties={
+                "inbound": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="The ID of the Inbound Shipment",
+                ),
+                "variant": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="Product variant UUID",
+                ),
+                "warehouse": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="Warehouse UUID",
+                ),
+                "expected_quantity": openapi.Schema(
+                    type=openapi.TYPE_INTEGER,
+                    description="Expected quantity (must be positive)",
+                    minimum=1,
+                ),
+                "received_quantity": openapi.Schema(
+                    type=openapi.TYPE_INTEGER,
+                    description="Received quantity (defaults to 0)",
+                    default=0,
+                    minimum=0,
+                ),
+                "unit_cost": openapi.Schema(
+                    type=openapi.TYPE_NUMBER,
+                    format="decimal",
+                    description="Unit cost (optional)",
+                    nullable=True,
+                ),
+                "received_at": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_DATETIME,
+                    description="Date and time when the item was received",
+                    nullable=True,
+                ),
+                "notes": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description="Additional notes (optional)",
+                    default="",
+                ),
+            },
+        ),
+        responses={
+            201: openapi.Response(
+                description="Inbound item created successfully",
+                schema=InboundItemSerializer,
+            ),
+            400: "Bad request - validation error",
+        },
+    )
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
 
     def get_queryset(self):
         queryset = super().get_queryset()
