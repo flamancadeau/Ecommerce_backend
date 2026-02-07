@@ -22,7 +22,6 @@ from .serializers import (
 from apps.audit.idempotency import idempotent_request
 from apps.catalog.models import Variant
 from apps.inventory.models import Stock, Warehouse
-from apps.inventory.services import InventoryService
 
 
 class CartViewSet(viewsets.ModelViewSet):
@@ -229,7 +228,7 @@ class CartViewSet(viewsets.ModelViewSet):
 
     def _check_availability(self, variant, requested_quantity):
         """Check stock availability using central service"""
-        availability = InventoryService.check_availability(variant, requested_quantity)
+        availability = Stock.objects.check_availability(variant.id, requested_quantity)
         return availability["available_quantity"]
 
 
@@ -261,9 +260,7 @@ class CheckoutViewSet(viewsets.ViewSet):
             raise ValidationError("cart_id is required")
 
         try:
-            from apps.orders.services import OrderService
-
-            result = OrderService.create_reservation(cart_id)
+            result = Reservation.objects.create_from_cart(cart_id)
             return Response(
                 {
                     "status": True,
@@ -328,11 +325,9 @@ class CheckoutViewSet(viewsets.ViewSet):
         if not email or not shipping_address:
             raise ValidationError("email and shipping_address are required")
 
-        from apps.orders.services import OrderService
-
         try:
             if reservation_token:
-                order = OrderService.create_order_from_reservation(
+                order = Order.objects.create_from_reservation(
                     reservation_token,
                     email,
                     shipping_address,
@@ -341,7 +336,7 @@ class CheckoutViewSet(viewsets.ViewSet):
                     ),
                 )
             elif cart_id:
-                order = OrderService.create_direct_order(
+                order = Order.objects.create_direct_order(
                     cart_id,
                     email,
                     shipping_address,
@@ -412,7 +407,7 @@ class CheckoutViewSet(viewsets.ViewSet):
 
     def _check_variant_availability(self, variant, quantity):
         """Check stock availability for variant using central service"""
-        availability = InventoryService.check_availability(variant, quantity)
+        availability = Stock.objects.check_availability(variant.id, quantity)
         return availability["available_quantity"]
 
 

@@ -4,11 +4,31 @@ from django.utils import timezone
 from decimal import Decimal
 import uuid
 from datetime import datetime
+from django.db import transaction
+from django.db.models import Q
+from django.core.exceptions import ValidationError
+
+from apps.inventory.models import Stock
+from apps.pricing.models import PriceBook
+from apps.audit.models import InventoryAudit
 
 
 def generate_reservation_token():
     """Generate a unique reservation token."""
     return str(uuid.uuid4())
+
+
+class CartQuerySet(models.QuerySet):
+    def active(self, cart_id=None, session_id=None, user_id=None):
+        now = timezone.now()
+        query = self.filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+        if cart_id:
+            return query.filter(id=cart_id).first()
+        if session_id:
+            return query.filter(session_id=session_id).first()
+        if user_id:
+            return query.filter(user_id=user_id).first()
+        return None
 
 
 class Cart(models.Model):
@@ -18,6 +38,8 @@ class Cart(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     expires_at = models.DateTimeField(null=True, blank=True)
+
+    objects = CartQuerySet.as_manager()
 
     class Meta:
         ordering = ["-created_at"]
@@ -80,6 +102,121 @@ class CartItem(models.Model):
         super().save(*args, **kwargs)
 
 
+class OrderQuerySet(models.QuerySet):
+    def for_customer(self, customer_id, status=None):
+        query = self.filter(customer_id=customer_id)
+        if status:
+            query = query.filter(status=status)
+        return query
+
+
+class OrderManager(models.Manager):
+    def get_queryset(self):
+        return OrderQuerySet(self.model, using=self._db)
+
+    @transaction.atomic
+    def create_from_reservation(
+        self, reservation_token, email, shipping_address, customer_id=None
+    ):
+        reservations = Reservation.objects.select_related(
+            "variant", "warehouse", "variant__product"
+        ).filter(reservation_token=reservation_token, status="pending")
+
+        if not reservations.exists():
+            raise ValidationError("Invalid or expired reservation")
+
+        first_res = reservations.first()
+        if first_res.is_expired:
+            raise ValidationError("Reservation expired")
+
+        subtotal = Decimal("0")
+        order_items_data = []
+
+        current_time = timezone.now()
+        context = {"channel": "web", "email": email}
+
+        for res in reservations:
+            stock = Stock.objects.select_for_update().get(
+                variant=res.variant, warehouse=res.warehouse
+            )
+
+            stock.reserved -= res.quantity
+            stock.on_hand -= res.quantity
+            stock.save()
+
+            res.status = Reservation.Status.CONFIRMED
+            res.save()
+
+            # Calculate Price
+            price_data = PriceBook.objects.calculate_price(
+                res.variant, context, res.quantity, current_time
+            )
+
+            unit_price = Decimal(str(price_data["final_unit_price"]))
+            line_total = Decimal(str(price_data["extended_price"]))
+
+            subtotal += line_total
+
+            order_items_data.append(
+                {
+                    "variant": res.variant,
+                    "warehouse": res.warehouse,
+                    "quantity": res.quantity,
+                    "unit_price": unit_price,
+                    "sku": res.variant.sku,
+                    "variant_name": res.variant.product.name,
+                }
+            )
+
+            InventoryAudit.objects.create(
+                event_type=InventoryAudit.EventType.FULFILLMENT,
+                variant=res.variant,
+                warehouse=stock.warehouse,
+                quantity=res.quantity,
+                from_quantity=stock.on_hand + res.quantity,
+                to_quantity=stock.on_hand,
+                reference=reservation_token,
+                notes="Order confirmed from reservation",
+            )
+
+        tax_rate = Decimal("0.21")
+        tax_amount = subtotal * tax_rate
+        shipping_amount = Decimal("5.99")
+        total = subtotal + tax_amount + shipping_amount
+
+        order = self.create(
+            customer_id=customer_id,
+            customer_email=email,
+            shipping_address=shipping_address,
+            billing_address=shipping_address,
+            subtotal=subtotal,
+            tax_amount=tax_amount,
+            shipping_amount=shipping_amount,
+            total=total,
+            status=self.model.Status.CONFIRMED,
+        )
+
+        for item_data in order_items_data:
+            OrderItem.objects.create(
+                order=order,
+                variant=item_data["variant"],
+                warehouse=item_data["warehouse"],
+                quantity=item_data["quantity"],
+                unit_price=item_data["unit_price"],
+                sku=item_data["sku"],
+                variant_name=item_data["variant_name"],
+            )
+
+        reservations.update(order=order)
+
+        return order
+
+    def create_direct_order(self, cart_id, email, shipping_address, customer_id=None):
+        res_data = Reservation.objects.create_from_cart(cart_id)
+        token = res_data["reservation_token"]
+        return self.create_from_reservation(token, email, shipping_address, customer_id)
+
+
 class Order(models.Model):
 
     class Status(models.TextChoices):
@@ -120,6 +257,8 @@ class Order(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = OrderManager()
 
     class Meta:
         ordering = ["-created_at"]
@@ -178,6 +317,93 @@ class OrderItem(models.Model):
         return self.unit_price * Decimal(self.quantity)
 
 
+class ReservationQuerySet(models.QuerySet):
+    def pending(self, variant_id=None, warehouse_id=None):
+        now = timezone.now()
+        query = self.filter(status="pending", expires_at__gt=now)
+        if variant_id:
+            query = query.filter(variant_id=variant_id)
+        if warehouse_id:
+            query = query.filter(warehouse_id=warehouse_id)
+        return query
+
+    def expired(self):
+        now = timezone.now()
+        return self.filter(status="pending", expires_at__lte=now)
+
+
+class ReservationManager(models.Manager):
+    def get_queryset(self):
+        return ReservationQuerySet(self.model, using=self._db)
+
+    @transaction.atomic
+    def create_from_cart(self, cart_id):
+        try:
+            cart = Cart.objects.get(id=cart_id)
+        except Cart.DoesNotExist:
+            raise ValidationError("Cart not found")
+
+        if cart.is_expired:
+            raise ValidationError("Cart has expired")
+
+        if not cart.items.exists():
+            raise ValidationError("Cart is empty")
+
+        reservations = []
+        reservation_token = str(uuid.uuid4())
+        expires_at = timezone.now() + timezone.timedelta(minutes=15)
+
+        # Access Variant through items
+        items = cart.items.select_related("variant").all()
+
+        for item in items:
+            variant = item.variant
+            quantity = item.quantity
+
+            # Find fulfillment options (from Stock model)
+            stock_option = Stock.objects.find_fulfillment(variant.id, quantity)
+            if not stock_option:
+                raise ValidationError(
+                    f"Insufficient stock for {variant.sku} (Global check)"
+                )
+
+            # Select for update to lock
+            locked_stock = Stock.objects.select_for_update().get(id=stock_option.id)
+
+            if not locked_stock.can_fulfill(quantity):
+                raise ValidationError(
+                    f"Insufficient stock for {variant.sku} at warehouse {locked_stock.warehouse.code}"
+                )
+
+            locked_stock.reserved += quantity
+            locked_stock.save()
+
+            res = self.create(
+                reservation_token=reservation_token,
+                variant=variant,
+                warehouse=locked_stock.warehouse,
+                quantity=quantity,
+                status=self.model.Status.PENDING,
+                expires_at=expires_at,
+            )
+            reservations.append(res)
+
+            InventoryAudit.objects.create(
+                event_type=InventoryAudit.EventType.RESERVATION,
+                variant=variant,
+                warehouse=locked_stock.warehouse,
+                quantity=quantity,
+                reference=reservation_token,
+                notes="Cart reservation",
+            )
+
+        return {
+            "reservation_token": reservation_token,
+            "expires_at": expires_at,
+            "items": len(reservations),
+        }
+
+
 class Reservation(models.Model):
 
     class Status(models.TextChoices):
@@ -217,6 +443,8 @@ class Reservation(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = ReservationManager()
 
     class Meta:
         ordering = ["-created_at"]

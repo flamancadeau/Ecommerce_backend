@@ -1,7 +1,13 @@
-from django.db import models
+from django.db import models, transaction
+from django.utils import timezone
 from django.core.validators import MinValueValidator
 from safedelete.models import SafeDeleteModel
 import uuid
+
+
+class CategoryQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(is_active=True)
 
 
 class Category(SafeDeleteModel):
@@ -15,6 +21,8 @@ class Category(SafeDeleteModel):
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
 
+    objects = CategoryQuerySet.as_manager()
+
     class Meta:
         verbose_name_plural = "categories"
         ordering = ["name"]
@@ -25,6 +33,14 @@ class Category(SafeDeleteModel):
 
     def __str__(self):
         return self.name
+
+
+class ProductQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(is_active=True)
+
+    def available(self):
+        return self.filter(is_active=True, launch_date__lte=timezone.now())
 
 
 class Product(SafeDeleteModel):
@@ -42,6 +58,8 @@ class Product(SafeDeleteModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = ProductQuerySet.as_manager()
+
     class Meta:
         ordering = ["-created_at"]
         indexes = [
@@ -54,6 +72,23 @@ class Product(SafeDeleteModel):
 
     def __str__(self):
         return self.name
+
+    def deactivate(self):
+        with transaction.atomic():
+            self.is_active = False
+            self.save()
+            self.variants.all().update(is_active=False)
+
+
+class VariantQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(is_active=True, status="active")
+
+    def by_sku(self, sku):
+        return self.filter(sku=sku, is_active=True, status="active").first()
+
+    def for_product(self, product_id):
+        return self.filter(product_id=product_id, is_active=True, status="active")
 
 
 class Variant(SafeDeleteModel):
@@ -91,6 +126,8 @@ class Variant(SafeDeleteModel):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = VariantQuerySet.as_manager()
 
     class Meta:
         ordering = ["sku"]

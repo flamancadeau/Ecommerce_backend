@@ -19,7 +19,6 @@ from .serializers import (
     InboundShipmentWriteSerializer,
     InboundItemSerializer,
 )
-from .services import InventoryService
 
 
 class _BaseViewSet(viewsets.ModelViewSet):
@@ -226,9 +225,7 @@ class StockViewSet(_BaseViewSet):
             )
 
         try:
-            stock = InventoryService.adjust_stock(
-                variant_id, warehouse_id, quantity, reason
-            )
+            stock = Stock.objects.adjust(variant_id, warehouse_id, quantity, reason)
             return Response({"success": True, "data": StockSerializer(stock).data})
         except Exception as e:
             return Response({"success": False, "message": str(e)}, status=400)
@@ -303,7 +300,7 @@ class StockViewSet(_BaseViewSet):
             with transaction.atomic():
                 if quantity is not None:
 
-                    stock = InventoryService.adjust_stock(
+                    stock = Stock.objects.adjust(
                         variant_id, warehouse_id, int(quantity), reason
                     )
                 else:
@@ -354,6 +351,48 @@ class InboundShipmentViewSet(_BaseViewSet):
 
         return queryset
 
+    @swagger_auto_schema(
+        operation_description="Receive items from an inbound shipment and update stock levels.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["items"],
+            properties={
+                "items": openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    description="List of items to receive",
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        required=["variant_id", "quantity"],
+                        properties={
+                            "variant_id": openapi.Schema(
+                                type=openapi.TYPE_STRING,
+                                format=openapi.FORMAT_UUID,
+                                description="The UUID of the variant being received",
+                            ),
+                            "quantity": openapi.Schema(
+                                type=openapi.TYPE_INTEGER,
+                                description="The quantity being received",
+                                minimum=1,
+                            ),
+                        },
+                    ),
+                ),
+            },
+        ),
+        responses={
+            200: openapi.Response(
+                description="Items received successfully",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "success": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        "message": openapi.Schema(type=openapi.TYPE_STRING),
+                    },
+                ),
+            ),
+            400: "Bad request - invalid data or shipment not found",
+        },
+    )
     @action(detail=True, methods=["post"], url_path="receive")
     @idempotent_request()
     def receive(self, request, pk=None):
@@ -365,10 +404,8 @@ class InboundShipmentViewSet(_BaseViewSet):
                 {"success": False, "message": "No items provided"}, status=400
             )
 
-        from .services import InventoryService
-
         try:
-            shipment = InventoryService.receive_shipment(pk, receipts)
+            shipment = InboundShipment.objects.receive_shipment(pk, receipts)
             return Response(
                 {
                     "success": True,
@@ -388,7 +425,11 @@ class InboundItemViewSet(_BaseViewSet):
     serializer_class = InboundItemSerializer
 
     @swagger_auto_schema(
-        operation_description="Create an inbound item linked to a shipment.",
+        operation_description=(
+            "Manually add an item to an existing inbound shipment. "
+            "Note: Items are usually added when creating the shipment. "
+            "Use this endpoint only if you need to add items to an existing shipment."
+        ),
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             required=["inbound", "variant", "warehouse", "expected_quantity"],
@@ -396,34 +437,55 @@ class InboundItemViewSet(_BaseViewSet):
                 "inbound": openapi.Schema(
                     type=openapi.TYPE_STRING,
                     format=openapi.FORMAT_UUID,
-                    description="The ID of the Inbound Shipment (from create shipment response)",
+                    description="The ID of the Inbound Shipment",
                 ),
                 "variant": openapi.Schema(
                     type=openapi.TYPE_STRING,
                     format=openapi.FORMAT_UUID,
-                    description="The Product Variant ID",
+                    description="Product variant UUID",
                 ),
                 "warehouse": openapi.Schema(
                     type=openapi.TYPE_STRING,
                     format=openapi.FORMAT_UUID,
-                    description="The Warehouse ID",
+                    description="Warehouse UUID",
                 ),
-                "expected_quantity": openapi.Schema(type=openapi.TYPE_INTEGER),
+                "expected_quantity": openapi.Schema(
+                    type=openapi.TYPE_INTEGER,
+                    description="Expected quantity (must be positive)",
+                    minimum=1,
+                ),
                 "received_quantity": openapi.Schema(
                     type=openapi.TYPE_INTEGER,
-                    description="The quantity already received (defaults to 0)",
+                    description="Received quantity (defaults to 0)",
                     default=0,
+                    minimum=0,
                 ),
-                "unit_cost": openapi.Schema(type=openapi.TYPE_NUMBER, format="decimal"),
+                "unit_cost": openapi.Schema(
+                    type=openapi.TYPE_NUMBER,
+                    format="decimal",
+                    description="Unit cost (optional)",
+                    nullable=True,
+                ),
                 "received_at": openapi.Schema(
                     type=openapi.TYPE_STRING,
                     format=openapi.FORMAT_DATETIME,
                     description="Date and time when the item was received",
                     nullable=True,
                 ),
-                "notes": openapi.Schema(type=openapi.TYPE_STRING),
+                "notes": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description="Additional notes (optional)",
+                    default="",
+                ),
             },
         ),
+        responses={
+            201: openapi.Response(
+                description="Inbound item created successfully",
+                schema=InboundItemSerializer,
+            ),
+            400: "Bad request - validation error",
+        },
     )
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)

@@ -3,8 +3,7 @@ from django.db import transaction
 from decimal import Decimal
 from apps.catalog.models import Product, Variant
 from apps.inventory.models import Stock, Warehouse
-from apps.orders.models import Cart, CartItem
-from apps.orders.services import OrderService
+from apps.orders.models import Cart, CartItem, Reservation
 import threading
 from django.db import connections
 
@@ -40,7 +39,7 @@ def test_concurrent_reservations():
         for attempt in range(10):
             connections.close_all()
             try:
-                OrderService.create_reservation(cart_id)
+                Reservation.objects.create_from_cart(cart_id)
                 results.append(True)
                 return
             except Exception as e:

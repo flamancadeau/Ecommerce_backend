@@ -41,9 +41,8 @@ class IdempotencyKeySerializer(serializers.ModelSerializer):
     def validate(self, data):
 
         if not data.get("request_hash") and data.get("response_body"):
-            from apps.audit.services import IdempotencyService
 
-            data["request_hash"] = IdempotencyService.get_request_hash(
+            data["request_hash"] = IdempotencyKey.objects.get_request_hash(
                 data.get("response_body")
             )
 
@@ -75,9 +74,8 @@ class IdempotencyKeySerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """Standardize the creation of idempotency keys."""
         if "key" not in validated_data:
-            from apps.audit.services import IdempotencyService
 
-            validated_data["key"] = IdempotencyService.generate_key()
+            validated_data["key"] = IdempotencyKey.objects.generate_key()
 
         if "expires_at" not in validated_data:
             # Default expiration: 24 hours from now

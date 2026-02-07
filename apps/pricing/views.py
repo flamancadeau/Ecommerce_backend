@@ -16,6 +16,7 @@ from drf_yasg import openapi
 
 from .models import PriceBook, PriceBookEntry, TaxRate
 from apps.audit.models import PriceAudit
+from apps.catalog.models import Variant
 from .serializers import (
     PriceBookSerializer,
     PriceBookEntrySerializer,
@@ -267,14 +268,12 @@ def price_quote(request):
         items_data = validated_data.get("items", [])
         results = []
 
-        from apps.pricing.services import PricingService
-
         for item in items_data:
-            item_result = PricingService.calculate_item_price(
-                variant_id=item["variant_id"],
+            item_result = PriceBook.objects.calculate_price(
+                variant=get_object_or_404(Variant, id=item["variant_id"]),
                 quantity=item["quantity"],
                 at_time=at_time,
-                customer_context=customer_context,
+                context=customer_context,
             )
             results.append(item_result)
 
@@ -347,23 +346,13 @@ def explain_price(request):
         quantity = validated_data.get("quantity", 1)
         customer_context = validated_data.get("customer_context", {})
 
-        from apps.catalog.models import Variant
-        from apps.pricing.services import PricingService
+        from apps.promotions.models import Campaign
 
         variant = get_object_or_404(Variant, id=variant_id)
 
-        base_price = PricingService.get_base_price(
-            variant, customer_context, at_time, quantity
-        )
-        campaigns = PricingService.get_applicable_campaigns(
-            variant, customer_context, at_time, quantity
-        )
-        tax_rate = PricingService.get_tax_rate(
-            customer_context.get("country", "DE"), variant.tax_class, at_time
-        )
-
-        final_calculation = PricingService.calculate_item_price(
-            variant_id, quantity, at_time, customer_context
+        # Use the central calculation logic
+        final_calculation = PriceBook.objects.calculate_price(
+            variant, customer_context, quantity, at_time
         )
 
         checks = []
@@ -395,7 +384,7 @@ def explain_price(request):
                     f"Group ({pb.customer_group} != {customer_membership})"
                 )
 
-            if entry.effective_from > at_time:
+            if entry.effective_from and entry.effective_from > at_time:
                 mismatches.append(f"Not effective yet (Starts {entry.effective_from})")
             if entry.effective_to and entry.effective_to < at_time:
                 mismatches.append(f"Expired (Ended {entry.effective_to})")
@@ -424,10 +413,7 @@ def explain_price(request):
                 }
             )
 
-        from apps.promotions.models import Campaign
-
         campaign_checks = []
-
         potential_campaigns = Campaign.objects.filter(
             end_at__gte=at_time - timezone.timedelta(days=1)
         )
@@ -441,15 +427,16 @@ def explain_price(request):
             if campaign.end_at < at_time:
                 c_mismatches.append(f"Already expired ({campaign.end_at})")
 
-            if not PricingService.is_customer_eligible(campaign, customer_context):
+            # Check eligibility using campaign model methods
+            if not campaign.is_customer_eligible(customer_context):
                 c_mismatches.append(
                     f"Customer group not eligible. Allowed: {campaign.customer_groups}"
                 )
 
-            if not PricingService.does_campaign_apply(campaign, variant):
+            if not campaign.applies_to_variant(variant):
                 c_mismatches.append("Product/Brand rules do not match this variant")
 
-            if not PricingService.meets_quantity_requirements(campaign, quantity):
+            if not campaign.meets_quantity_requirements(quantity):
                 c_mismatches.append("Quantity requirements not met")
 
             campaign_checks.append(
@@ -476,8 +463,8 @@ def explain_price(request):
                 "channel": customer_channel,
                 "membership_tier": customer_membership,
             },
-            "base_price_used": float(base_price),
-            "tax_rate_used": float(tax_rate),
+            "base_price_used": final_calculation.get("base_price"),
+            "tax_rate_used": final_calculation.get("tax_rate"),
             "price_books_analysis": checks,
             "campaigns_analysis": campaign_checks,
             "final_calculation": final_calculation,

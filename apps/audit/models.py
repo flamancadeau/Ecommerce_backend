@@ -1,6 +1,42 @@
 from django.db import models
 import uuid
 from django.utils import timezone
+import csv
+import hashlib
+import json
+from io import StringIO
+from datetime import timedelta
+from django.db import transaction
+
+
+class PriceAuditQuerySet(models.QuerySet):
+    def to_csv(self):
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "SKU",
+                "Price Book",
+                "Old Price",
+                "New Price",
+                "Currency",
+                "Reason",
+                "Changed At",
+            ]
+        )
+        for audit in self:
+            writer.writerow(
+                [
+                    audit.variant.sku if audit.variant else "N/A",
+                    audit.price_book.code if audit.price_book else "N/A",
+                    audit.old_price,
+                    audit.new_price,
+                    audit.currency,
+                    audit.reason,
+                    audit.changed_at,
+                ]
+            )
+        return output.getvalue()
 
 
 class PriceAudit(models.Model):
@@ -28,6 +64,8 @@ class PriceAudit(models.Model):
     reason = models.CharField(max_length=200, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
 
+    objects = PriceAuditQuerySet.as_manager()
+
     class Meta:
         ordering = ["-changed_at"]
         indexes = [
@@ -39,6 +77,29 @@ class PriceAudit(models.Model):
     def __str__(self):
         target = self.variant.sku if self.variant else self.price_book.code
         return f"Price change for {target}: {self.old_price} → {self.new_price}"
+
+
+class InventoryAuditQuerySet(models.QuerySet):
+    def to_csv(self):
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            ["Event", "SKU", "Warehouse", "Qty", "From", "To", "Ref", "Date"]
+        )
+        for audit in self:
+            writer.writerow(
+                [
+                    audit.event_type,
+                    audit.variant.sku if audit.variant else "N/A",
+                    audit.warehouse.code if audit.warehouse else "N/A",
+                    audit.quantity,
+                    audit.from_quantity,
+                    audit.to_quantity,
+                    audit.reference,
+                    audit.created_at,
+                ]
+            )
+        return output.getvalue()
 
 
 class InventoryAudit(models.Model):
@@ -72,6 +133,8 @@ class InventoryAudit(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     created_by = models.UUIDField(null=True, blank=True)
 
+    objects = InventoryAuditQuerySet.as_manager()
+
     class Meta:
         ordering = ["-created_at"]
         indexes = [
@@ -82,6 +145,54 @@ class InventoryAudit(models.Model):
 
     def __str__(self):
         return f"{self.get_event_type_display()}: {self.variant.sku} ({self.quantity})"
+
+
+class CampaignAuditQuerySet(models.QuerySet):
+    def to_csv(self):
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "Campaign Code",
+                "Campaign Name",
+                "Changed Field",
+                "Old Value",
+                "New Value",
+                "Reason",
+                "Changed At",
+                "Changed By",
+            ]
+        )
+        for audit in self:
+            writer.writerow(
+                [
+                    audit.campaign.code if audit.campaign else "N/A",
+                    (
+                        audit.campaign.name
+                        if audit.campaign and hasattr(audit.campaign, "name")
+                        else "N/A"
+                    ),
+                    audit.changed_field or "",
+                    (
+                        (audit.old_value[:50] + "...")
+                        if audit.old_value and len(audit.old_value) > 50
+                        else (audit.old_value or "")
+                    ),
+                    (
+                        (audit.new_value[:50] + "...")
+                        if audit.new_value and len(audit.new_value) > 50
+                        else (audit.new_value or "")
+                    ),
+                    audit.reason or "",
+                    (
+                        audit.changed_at.strftime("%Y-%m-%d %H:%M:%S")
+                        if audit.changed_at
+                        else ""
+                    ),
+                    str(audit.changed_by)[:8] if audit.changed_by else "System",
+                ]
+            )
+        return output.getvalue()
 
 
 class CampaignAudit(models.Model):
@@ -97,6 +208,8 @@ class CampaignAudit(models.Model):
     reason = models.CharField(max_length=200, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
 
+    objects = CampaignAuditQuerySet.as_manager()
+
     class Meta:
         ordering = ["-changed_at"]
         indexes = [
@@ -106,6 +219,41 @@ class CampaignAudit(models.Model):
 
     def __str__(self):
         return f"{self.campaign.code}: {self.changed_field} changed"
+
+
+class IdempotencyKeyManager(models.Manager):
+    def generate_key(self):
+        return str(uuid.uuid4())
+
+    def get_request_hash(self, data):
+        if not data:
+            return ""
+        request_body = json.dumps(data, sort_keys=True)
+        return hashlib.sha256(request_body.encode()).hexdigest()
+
+    def verify_or_create(
+        self, key, request_path, request_data=None, expires_in_hours=24
+    ):
+        """
+        Main logic for idempotency check.
+        Returns (idem_key, created)
+        """
+        request_hash = self.get_request_hash(request_data)
+
+        with transaction.atomic():
+            (
+                idem_key,
+                created,
+            ) = self.select_for_update().get_or_create(
+                key=key,
+                defaults={
+                    "request_path": request_path,
+                    "request_hash": request_hash,
+                    "status": self.model.Status.PROCESSING,
+                    "expires_at": timezone.now() + timedelta(hours=expires_in_hours),
+                },
+            )
+            return idem_key, created
 
 
 class IdempotencyKey(models.Model):
@@ -139,6 +287,8 @@ class IdempotencyKey(models.Model):
         related_name="idempotency_keys",
     )
 
+    objects = IdempotencyKeyManager()
+
     class Meta:
         ordering = ["-created_at"]
         indexes = [
@@ -153,3 +303,13 @@ class IdempotencyKey(models.Model):
     @property
     def is_expired(self) -> bool:
         return bool(self.expires_at and self.expires_at < timezone.now())
+
+    def mark_completed(self, response_code, response_body):
+        self.status = self.Status.COMPLETED
+        self.response_code = response_code
+        self.response_body = response_body
+        self.save()
+
+    def mark_failed(self):
+        self.status = self.Status.FAILED
+        self.save()

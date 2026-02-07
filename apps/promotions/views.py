@@ -54,6 +54,7 @@ class CampaignViewSet(viewsets.ModelViewSet):
 
         return qs
 
-    def remove_filter(self, request, pk=None, filter_id=None):
-        CampaignRule.objects.filter(id=filter_id, campaign_id=pk).delete()
+    @action(detail=True, methods=["delete"], url_path="rules/(?P<rule_id>[^/.]+)")
+    def remove_rule(self, request, pk=None, rule_id=None):
+        CampaignRule.objects.filter(id=rule_id, campaign_id=pk).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

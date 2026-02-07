@@ -9,6 +9,6 @@ router.register(
 router.register(r"scheduled-jobs", views.ScheduledJobViewSet, basename="scheduled-job")
 
 urlpatterns = [
-    path("api/v1/", include(router.urls)),
+    path("", include(router.urls)),
     path("system-status/", views.system_status, name="system-status"),
 ]

@@ -1,6 +1,5 @@
 from functools import wraps
 from rest_framework.response import Response
-from .services import IdempotencyService
 from .models import IdempotencyKey
 
 
@@ -22,7 +21,7 @@ def idempotent_request(key_field="idempotency_key"):
 
             full_key = f"{request.path}:{key}"
 
-            idem_key, created = IdempotencyService.verify_or_create(
+            idem_key, created = IdempotencyKey.objects.verify_or_create(
                 key=full_key, request_path=request.path, request_data=request.data
             )
 
@@ -40,15 +39,13 @@ def idempotent_request(key_field="idempotency_key"):
                 response = view_func(view_instance, request, *args, **kwargs)
 
                 if response.status_code < 500:
-                    IdempotencyService.complete_key(
-                        idem_key, response.status_code, response.data
-                    )
+                    idem_key.mark_completed(response.status_code, response.data)
                 else:
-                    IdempotencyService.mark_failed(idem_key)
+                    idem_key.mark_failed()
 
                 return response
             except Exception as e:
-                IdempotencyService.mark_failed(idem_key)
+                idem_key.mark_failed()
                 raise e
 
         return _wrapped_view

@@ -17,13 +17,11 @@ class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
 
     def create(self, request, *args, **kwargs):
-        from .services import CatalogService
-
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         try:
-            product = CatalogService.create_product_with_variants(
-                product_data=request.data, variants_data=request.data.get("variants")
-            )
-            serializer = self.get_serializer(product)
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
             return Response(
                 {
                     "success": True,
@@ -31,6 +29,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     "data": serializer.data,
                 },
                 status=status.HTTP_201_CREATED,
+                headers=headers,
             )
         except Exception as e:
             return Response(
@@ -65,11 +64,13 @@ class ProductViewSet(viewsets.ModelViewSet):
         )
 
     def update(self, request, *args, **kwargs):
-        from .services import CatalogService
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
 
         try:
-            product = CatalogService.update_product(kwargs.get("pk"), request.data)
-            serializer = self.get_serializer(product)
+            self.perform_update(serializer)
             return Response(
                 {
                     "success": True,
@@ -84,10 +85,9 @@ class ProductViewSet(viewsets.ModelViewSet):
             )
 
     def destroy(self, request, *args, **kwargs):
-        from .services import CatalogService
-
         try:
-            CatalogService.deactivate_product(kwargs.get("pk"))
+            product = self.get_object()
+            product.deactivate()
             return Response(
                 {
                     "success": True,

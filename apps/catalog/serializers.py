@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.db import transaction
 from .models import Product, Category, Variant
 
 
@@ -96,3 +97,22 @@ class ProductSerializer(serializers.ModelSerializer):
         if not value or len(value.strip()) == 0:
             raise serializers.ValidationError("Product name cannot be empty.")
         return value
+
+    @transaction.atomic
+    def create(self, validated_data):
+        variants_data = self.initial_data.get("variants")
+        product = Product.objects.create(**validated_data)
+
+        if variants_data:
+            for variant_data in variants_data:
+                variant_data["product"] = product
+                Variant.objects.create(**variant_data)
+
+        return product
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance

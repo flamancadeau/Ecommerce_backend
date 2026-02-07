@@ -12,7 +12,7 @@ from drf_yasg import openapi
 
 from .models import ScheduledJob
 from apps.audit.models import IdempotencyKey
-from apps.audit.services import IdempotencyService
+
 from .serializers import (
     IdempotencyKeySerializer,
     ScheduledJobSerializer,
@@ -21,7 +21,6 @@ from .serializers import (
     CampaignActivationSerializer,
     CreateIdempotencyKeySerializer,
 )
-from .services import SchedulerService
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
     queryset = IdempotencyKey.objects.all()
     serializer_class = IdempotencyKeySerializer
     permission_classes = [IsAuthenticated]
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "delete", "head", "options"]
     filter_backends = [
         DjangoFilterBackend,
         filters.SearchFilter,
@@ -68,7 +67,7 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
 
         key_val = serializer.validated_data.get("key")
         if not key_val:
-            key_val = IdempotencyService.generate_key()
+            key_val = IdempotencyKey.objects.generate_key()
 
         instance = IdempotencyKey.objects.create(
             key=key_val,
@@ -96,6 +95,48 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
         )
 
     @swagger_auto_schema(
+        operation_description="Delete an idempotency key by its ID. Only staff users can perform this action.",
+        responses={
+            200: openapi.Response(
+                description="Idempotency key deleted successfully",
+                examples={
+                    "application/json": {
+                        "status": True,
+                        "message": "Idempotency key deleted successfully",
+                        "data": {
+                            "deleted_key_id": "123e4567-e89b-12d3-a456-426614174000",
+                            "deleted_key": "idem_key_abc123xyz",
+                        },
+                    }
+                },
+            ),
+            403: openapi.Response(
+                description="Permission denied - staff access required"
+            ),
+            404: openapi.Response(description="Idempotency key not found"),
+        },
+    )
+    def destroy(self, request, *args, **kwargs):
+        """Delete an idempotency key"""
+        instance = self.get_object()
+        key_id = instance.id
+        key_value = instance.key
+
+        self.perform_destroy(instance)
+
+        return Response(
+            {
+                "status": True,
+                "message": "Idempotency key deleted successfully",
+                "data": {
+                    "deleted_key_id": str(key_id),
+                    "deleted_key": key_value,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
         operation_description="Mark an idempotency key as successfully completed",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
@@ -116,7 +157,7 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        IdempotencyService.complete_key(key, 200, request.data.get("response"))
+        key.mark_completed(200, request.data.get("response"))
         return Response(
             {
                 "status": True,
@@ -150,7 +191,7 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
             "failed_at": timezone.now().isoformat(),
         }
 
-        IdempotencyService.mark_failed(key)
+        key.mark_failed()
 
         key.response_body = error_data
         key.response_code = 500
@@ -176,7 +217,205 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
         key_val = serializer.validated_data["key"]
         expires_hrs = serializer.validated_data["expires_in_hours"]
 
-        idem_key, created = IdempotencyService.verify_or_create(
+        idem_key, created = IdempotencyKey.objects.verify_or_create(
+            key=key_val,
+            request_path=request.path,
+            request_data=request.data,
+            expires_in_hours=expires_hrs,
+        )
+
+        return Response(
+            {
+                "status": True,
+                "data": {
+                    "idempotent": True,
+                    "status": idem_key.status,
+                    "key_id": str(idem_key.id),
+                    "created": created,
+                },
+            }
+        )
+
+    """
+    API for managing Idempotency Keys.
+    Keys are primarily used to ensure request safety.
+    """
+
+    queryset = IdempotencyKey.objects.all()
+    serializer_class = IdempotencyKeySerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "post", "delete", "head", "options"]  # Added "delete"
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
+    filterset_fields = ["status", "key"]
+    search_fields = ["key", "request_hash"]
+    ordering_fields = ["created_at", "expires_at"]
+    ordering = ["-created_at"]
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return CreateIdempotencyKeySerializer
+        return IdempotencyKeySerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if not self.request.user.is_staff:
+            return queryset.none()
+        return queryset
+
+    @swagger_auto_schema(
+        operation_description="Create a new idempotency key manually or let the system auto-generate one.",
+        request_body=CreateIdempotencyKeySerializer,
+        responses={201: IdempotencyKeySerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = CreateIdempotencyKeySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        key_val = serializer.validated_data.get("key")
+        if not key_val:
+            key_val = IdempotencyKey.objects.generate_key()
+
+        instance = IdempotencyKey.objects.create(
+            key=key_val,
+            status=serializer.validated_data.get(
+                "status", IdempotencyKey.Status.PROCESSING
+            ),
+            response_body=serializer.validated_data.get("response_body"),
+            expires_at=serializer.validated_data.get("expires_at")
+            or (timezone.now() + timezone.timedelta(hours=24)),
+        )
+
+        full_serializer = IdempotencyKeySerializer(
+            instance, data=request.data, partial=True
+        )
+        full_serializer.is_valid()
+        full_serializer.save()
+
+        return Response(
+            {
+                "status": True,
+                "message": "Idempotency key created successfully",
+                "data": IdempotencyKeySerializer(instance).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @swagger_auto_schema(
+        operation_description="Delete an idempotency key by its ID. Only staff users can perform this action.",
+        responses={
+            204: openapi.Response(description="Idempotency key deleted successfully"),
+            403: openapi.Response(
+                description="Permission denied - staff access required"
+            ),
+            404: openapi.Response(description="Idempotency key not found"),
+        },
+    )
+    def destroy(self, request, *args, **kwargs):
+        """Delete an idempotency key"""
+        instance = self.get_object()
+        key_id = instance.id
+        key_value = instance.key
+
+        self.perform_destroy(instance)
+
+        return Response(
+            {
+                "status": True,
+                "message": "Idempotency key deleted successfully",
+                "data": {
+                    "deleted_key_id": str(key_id),
+                    "deleted_key": key_value,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_description="Mark an idempotency key as successfully completed",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "response": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    description="Optional response body to cache",
+                )
+            },
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="complete")
+    def complete(self, request, pk=None):
+        key = self.get_object()
+        if key.status != IdempotencyKey.Status.PROCESSING:
+            return Response(
+                {"status": False, "message": f"Key is already {key.status}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        key.mark_completed(200, request.data.get("response"))
+        return Response(
+            {
+                "status": True,
+                "message": "Key completed",
+                "data": IdempotencyKeySerializer(key).data,
+            }
+        )
+
+    @swagger_auto_schema(
+        operation_description="Mark an idempotency key as failed and record the reason.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "reason": openapi.Schema(
+                    type=openapi.TYPE_STRING, description="Brief explanation of failure"
+                ),
+                "error_details": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    description="Detailed error object for debugging",
+                ),
+            },
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="fail")
+    def fail(self, request, pk=None):
+        key = self.get_object()
+
+        error_data = {
+            "reason": request.data.get("reason", "Manual failure trigger"),
+            "details": request.data.get("error_details", {}),
+            "failed_at": timezone.now().isoformat(),
+        }
+
+        key.mark_failed()
+
+        key.response_body = error_data
+        key.response_code = 500
+        key.save()
+
+        return Response(
+            {
+                "status": True,
+                "message": "Key marked as failed and error recorded",
+                "error_stored": error_data,
+            }
+        )
+
+    @swagger_auto_schema(
+        operation_description="Claim, Verify, or Create a new idempotency key for a specific business flow.",
+        request_body=IdempotencyRequestSerializer,
+    )
+    @action(detail=False, methods=["post"], url_path="verify")
+    def verify(self, request):
+        serializer = IdempotencyRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        key_val = serializer.validated_data["key"]
+        expires_hrs = serializer.validated_data["expires_in_hours"]
+
+        idem_key, created = IdempotencyKey.objects.verify_or_create(
             key=key_val,
             request_path=request.path,
             request_data=request.data,
@@ -227,7 +466,7 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
         serializer = CreateScheduledJobSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        job = SchedulerService.create_job(
+        job = ScheduledJob.objects.create_job(
             job_type=serializer.validated_data["job_type"],
             scheduled_at=serializer.validated_data["scheduled_at"],
             payload=serializer.validated_data.get("payload"),
@@ -254,7 +493,7 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
     def execute_now(self, request, pk=None):
         job = self.get_object()
         try:
-            SchedulerService.execute_now(job)
+            ScheduledJob.objects.execute_now(job)
             return Response({"status": True, "message": "Job execution started"})
         except ValueError as e:
             return Response({"status": False, "message": str(e)}, status=400)
@@ -264,7 +503,7 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
     def cancel(self, request, pk=None):
         job = self.get_object()
         try:
-            SchedulerService.cancel_job(job)
+            ScheduledJob.objects.cancel_job(job)
             return Response({"status": True, "message": "Job cancelled"})
         except ValueError as e:
             return Response({"status": False, "message": str(e)}, status=400)
@@ -274,7 +513,7 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
     def retry(self, request, pk=None):
         job = self.get_object()
         try:
-            SchedulerService.retry_job(job)
+            ScheduledJob.objects.retry_job(job)
             return Response({"status": True, "message": "Job retry scheduled"})
         except ValueError as e:
             return Response({"status": False, "message": str(e)}, status=400)
@@ -309,7 +548,7 @@ class ScheduledJobViewSet(viewsets.ModelViewSet):
         campaign_id = serializer.validated_data["campaign_id"]
         activate_at = serializer.validated_data["activate_at"]
         try:
-            job = SchedulerService.schedule_campaign_activation(
+            job = ScheduledJob.objects.schedule_campaign_activation(
                 campaign_id, activate_at
             )
             return Response(
@@ -358,7 +597,7 @@ class IdempotencyMiddlewareView(APIView):
         if not key:
             return Response(business_logic_function())
 
-        idem_key, created = IdempotencyService.verify_or_create(
+        idem_key, created = IdempotencyKey.objects.verify_or_create(
             key=key, request_path=request.path, request_data=request.data
         )
 
@@ -370,8 +609,8 @@ class IdempotencyMiddlewareView(APIView):
 
         try:
             result = business_logic_function()
-            IdempotencyService.complete_key(idem_key, 200, result)
+            idem_key.mark_completed(200, result)
             return Response(result)
         except Exception as e:
-            IdempotencyService.mark_failed(idem_key)
+            idem_key.mark_failed()
             return Response({"status": False, "message": str(e)}, status=500)

@@ -15,6 +15,6 @@ checkout_patterns = [
 ]
 
 urlpatterns = [
-    path("api/v1/", include(router.urls)),
+    path("", include(router.urls)),
     path("checkout/", include(checkout_patterns)),
 ]

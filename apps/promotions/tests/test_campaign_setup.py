@@ -43,21 +43,22 @@ class TestCampaignSetup:
         """
         Verify that our fix for date-string-vs-datetime comparison works.
         """
-        from apps.promotions.services import PromotionsService
-
-        # This data uses strings for dates, simulating direct service calls or API raw data
+        # This data uses strings for dates
         campaign_data = {
             "name": "Date Fix Test",
             "start_at": "2026-02-01T00:00:00Z",
             "end_at": "2026-02-28T23:59:59Z",
         }
 
-        # This used to crash due to internal status property comparison
-        campaign = PromotionsService.create_campaign(campaign_data)
+        serializer = CampaignSerializer(data=campaign_data)
+        assert serializer.is_valid()
+        campaign = serializer.save()
 
         # If we reach here, it didn't crash. Let's verify status.
         assert campaign.status in ["active", "scheduled", "expired"]
-        assert isinstance(campaign.start_at, timezone.datetime)
+        from datetime import datetime
+
+        assert isinstance(campaign.start_at, datetime)
 
     def test_nested_campaign_update(self):
         """Test that updating replaces old rules."""

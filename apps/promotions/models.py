@@ -20,6 +20,32 @@ class PriceBook(models.Model):
         return self.name
 
 
+class CampaignManager(models.Manager):
+    def get_applicable(self, variant, customer_context, at_time, quantity):
+        """
+        Get all campaigns that apply to this variant.
+        """
+        campaigns = self.filter(
+            start_at__lte=at_time, end_at__gte=at_time, is_active=True
+        )
+
+        applicable = []
+
+        for campaign in campaigns:
+            if not campaign.is_customer_eligible(customer_context):
+                continue
+
+            if not campaign.applies_to_variant(variant):
+                continue
+
+            if not campaign.meets_quantity_requirements(quantity):
+                continue
+
+            applicable.append(campaign)
+
+        return applicable
+
+
 class Campaign(models.Model):
 
     class StackingType(models.TextChoices):
@@ -51,6 +77,8 @@ class Campaign(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = CampaignManager()
+
     @property
     def status(self):
         now = timezone.now()
@@ -62,6 +90,101 @@ class Campaign(models.Model):
 
     def __str__(self):
         return self.code
+
+    def is_customer_eligible(self, customer_context):
+        """Check if customer is eligible for campaign."""
+        customer_group = str(customer_context.get("membership_tier", "retail")).lower()
+
+        def get_group_list(data):
+            if not data:
+                return []
+            if isinstance(data, list):
+                return [str(g).lower() for g in data]
+            if isinstance(data, dict):
+                return [str(k).lower() for k, v in data.items() if v]
+            return []
+
+        allowed_groups = get_group_list(self.customer_groups)
+        if allowed_groups and customer_group not in allowed_groups:
+            return False
+
+        excluded_groups = get_group_list(self.excluded_customer_groups)
+        if excluded_groups and customer_group in excluded_groups:
+            return False
+
+        return True
+
+    def applies_to_variant(self, variant):
+        """Check if campaign applies to variant based on rules."""
+        rules = self.rules.all()
+
+        if not rules.exists():
+            return True
+
+        include_rules = [r for r in rules if r.action == "include"]
+        exclude_rules = [r for r in rules if r.action == "exclude"]
+
+        for rule in exclude_rules:
+            if self._evaluate_rule(rule, variant):
+                return False
+
+        if not include_rules:
+            return True
+
+        for rule in include_rules:
+            if self._evaluate_rule(rule, variant):
+                return True
+
+        return False
+
+    def _evaluate_rule(self, rule, variant):
+        """Evaluate a single campaign rule against a variant."""
+        if rule.rule_type == "product":
+            return rule.value == str(variant.product.id)
+
+        elif rule.rule_type == "variant":
+            return rule.value == str(variant.id)
+
+        elif rule.rule_type == "category":
+            if variant.product.category:
+                return rule.value == str(variant.product.category.id)
+
+        elif rule.rule_type == "brand":
+            return (rule.value or "").lower() == (variant.product.brand or "").lower()
+
+        elif rule.rule_type == "attribute":
+            try:
+                attr_key, attr_value = rule.value.split(":", 1)
+                variant_val = variant.attributes.get(attr_key)
+                if variant_val is None:
+                    return False
+                return str(variant_val).lower() == str(attr_value).lower()
+            except (ValueError, AttributeError):
+                return False
+
+        return False
+
+    def meets_quantity_requirements(self, quantity):
+        """Check if quantity meets campaign requirements."""
+        discount = self.discounts.first()
+        if not discount:
+            return True
+
+        if quantity < discount.min_quantity:
+            return False
+
+        if discount.max_quantity and quantity > discount.max_quantity:
+            return False
+
+        return True
+
+    def calculate_discount(self, base_price, quantity):
+        """Calculate discount amount."""
+        discount = self.discounts.first()
+        if not discount:
+            return Decimal("0")
+
+        return discount.calculate_discount(base_price)
 
 
 @receiver(pre_save, sender=Campaign)
@@ -81,6 +204,7 @@ class CampaignRule(models.Model):
         VARIANT = "variant", "Variant"
         CATEGORY = "category", "Category"
         BRAND = "brand", "Brand"
+        ATTRIBUTE = "attribute", "Attribute"
 
     class Operator(models.TextChoices):
         EQUALS = "equals", "Equals"
@@ -150,15 +274,19 @@ class CampaignDiscount(models.Model):
 
     def calculate_discount(self, price: Decimal) -> Decimal:
         if self.discount_type == self.DiscountType.PERCENTAGE:
-            discount = price * (self.value / Decimal("100"))
+            amount = price * (self.value / Decimal("100"))
         elif self.discount_type == self.DiscountType.FIXED_AMOUNT:
-            discount = self.value
+            amount = self.value
         elif self.discount_type == self.DiscountType.PRICE_OVERRIDE:
-            discount = max(price - self.value, Decimal("0"))
+            amount = max(price - self.value, Decimal("0"))
         else:
-            discount = Decimal("0")
+            amount = Decimal("0")
 
         if self.max_discount_amount is not None:
-            discount = min(discount, self.max_discount_amount)
+            amount = min(amount, self.max_discount_amount)
 
-        return discount
+        if self.min_price is not None:
+            final_price = max(price - amount, self.min_price)
+            amount = price - final_price
+
+        return amount

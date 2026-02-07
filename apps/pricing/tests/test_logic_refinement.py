@@ -3,7 +3,6 @@ from decimal import Decimal
 from django.utils import timezone
 from apps.catalog.models import Product, Variant, Category
 from apps.pricing.models import PriceBook, PriceBookEntry
-from apps.pricing.services import PricingService
 
 
 @pytest.mark.django_db
@@ -62,21 +61,21 @@ class TestPricingRefinement:
         ctx = {"country": "DE", "channel": "retail", "membership_tier": ""}
 
         # Test Tier 1 (qty=3)
-        price_data = PricingService.calculate_item_price(
-            variant_id=variant.id,
+        price_data = PriceBook.objects.calculate_price(
+            variant=variant,
             quantity=3,
             at_time=timezone.now(),
-            customer_context=ctx,
+            context=ctx,
         )
         assert price_data["final_unit_price"] == 900.00
         assert price_data["price_book_used"]["price_book_name"] == "Germany Retail"
 
         # Test Tier 2 (qty=10)
-        price_data = PricingService.calculate_item_price(
-            variant_id=variant.id,
+        price_data = PriceBook.objects.calculate_price(
+            variant=variant,
             quantity=10,
             at_time=timezone.now(),
-            customer_context=ctx,
+            context=ctx,
         )
         assert price_data["final_unit_price"] == 850.00
 
@@ -85,11 +84,11 @@ class TestPricingRefinement:
         ctx = {"country": "FR", "channel": "retail", "membership_tier": ""}
 
         # Test Missing Context (e.g. France) -> Should fall back to Default
-        price_data = PricingService.calculate_item_price(
-            variant_id=variant.id,
+        price_data = PriceBook.objects.calculate_price(
+            variant=variant,
             quantity=1,
             at_time=timezone.now(),
-            customer_context=ctx,
+            context=ctx,
         )
         assert price_data["final_unit_price"] == 950.00
         assert price_data["price_book_used"]["price_book_name"] == "Default EUR"

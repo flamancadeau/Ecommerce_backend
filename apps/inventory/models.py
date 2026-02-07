@@ -1,7 +1,15 @@
 from django.db import models
 from django.core.validators import MinValueValidator
 from django.utils import timezone
+from django.db import transaction
+from django.db.models import Sum, F
+from apps.audit.models import InventoryAudit
 import uuid
+
+
+class WarehouseQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(is_active=True)
 
 
 class Warehouse(models.Model):
@@ -16,6 +24,8 @@ class Warehouse(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = WarehouseQuerySet.as_manager()
 
     class Meta:
         ordering = ["code"]
@@ -51,6 +61,86 @@ class Warehouse(models.Model):
         super().save(*args, **kwargs)
 
 
+class StockQuerySet(models.QuerySet):
+    def for_variant(self, variant_id):
+        return self.filter(variant_id=variant_id)
+
+    def backorderable(self):
+        return self.filter(backorderable=True)
+
+    def find_fulfillment(self, variant_id, quantity):
+        # Logic from Repository
+        stock = (
+            self.filter(
+                variant_id=variant_id,
+                warehouse__is_active=True,
+                available__gte=quantity,
+            )
+            .order_by("-available")
+            .first()
+        )
+
+        if stock:
+            return stock
+
+        return (
+            self.filter(
+                variant_id=variant_id, warehouse__is_active=True, backorderable=True
+            )
+            .order_by("-available")
+            .first()
+        )
+
+    def check_availability(self, variant_id, quantity, warehouse=None):
+        # Logic from Service/Repository
+        query = self.filter(variant_id=variant_id, warehouse__is_active=True)
+        if warehouse:
+            query = query.filter(warehouse=warehouse)
+
+        stats = query.aggregate(
+            total_on_hand=Sum("on_hand"), total_available=Sum("available")
+        )
+        total_available = stats["total_available"] or 0
+
+        is_backorderable = False
+        if total_available < quantity:
+            is_backorderable = self.filter(
+                variant_id=variant_id, warehouse__is_active=True, backorderable=True
+            ).exists()
+
+        return {
+            "available": total_available >= quantity,
+            "message": "In stock" if total_available >= quantity else "Out of stock",
+            "available_quantity": total_available,
+            "backorderable": is_backorderable,
+        }
+
+
+class StockManager(models.Manager.from_queryset(StockQuerySet)):
+    pass
+
+    def adjust(self, variant_id, warehouse_id, quantity, reason="Manual adjustment"):
+        with transaction.atomic():
+            stock, created = self.select_for_update().get_or_create(
+                variant_id=variant_id, warehouse_id=warehouse_id
+            )
+
+            old_qty = stock.on_hand
+            stock.on_hand += quantity
+            stock.save()
+
+            InventoryAudit.objects.create(
+                event_type=InventoryAudit.EventType.ADJUSTMENT,
+                variant_id=variant_id,
+                warehouse_id=warehouse_id,
+                quantity=quantity,
+                from_quantity=old_qty,
+                to_quantity=stock.on_hand,
+                notes=reason,
+            )
+            return stock
+
+
 class Stock(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     variant = models.ForeignKey(
@@ -71,6 +161,8 @@ class Stock(models.Model):
     safety_stock = models.IntegerField(default=0, validators=[MinValueValidator(0)])
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = StockManager()
 
     class Meta:
         unique_together = ["variant", "warehouse"]
@@ -93,6 +185,78 @@ class Stock(models.Model):
         ):
             return True
         return False
+
+
+class InboundShipmentQuerySet(models.QuerySet):
+    def overdue(self):
+        return self.filter(
+            expected_at__lt=timezone.now(), status__in=["pending", "in_transit"]
+        )
+
+
+class InboundShipmentManager(models.Manager):
+    def get_queryset(self):
+        return InboundShipmentQuerySet(self.model, using=self._db)
+
+    @transaction.atomic
+    def receive_shipment(self, shipment_id, items_data):
+        try:
+            shipment = self.select_for_update().get(id=shipment_id)
+        except self.model.DoesNotExist:
+            raise ValueError("Shipment not found")
+
+        if shipment.status in ["received", "cancelled"]:
+            raise ValueError(
+                f"Cannot receive items for shipment in status {shipment.status}"
+            )
+
+        for receipt in items_data:
+            variant_id = receipt.get("variant_id")
+            qty = int(receipt.get("quantity", 0))
+
+            if qty <= 0:
+                continue
+
+            try:
+                item = InboundItem.objects.select_for_update().get(
+                    inbound=shipment, variant_id=variant_id
+                )
+                item.received_quantity += qty
+                item.save()
+
+                # Update stock
+                stock, _ = Stock.objects.select_for_update().get_or_create(
+                    variant_id=variant_id, warehouse=item.warehouse
+                )
+                old_qty = stock.on_hand
+                stock.on_hand += qty
+                stock.save()
+
+                InventoryAudit.objects.create(
+                    event_type=InventoryAudit.EventType.RECEIPT,
+                    variant_id=variant_id,
+                    warehouse=item.warehouse,
+                    quantity=qty,
+                    from_quantity=old_qty,
+                    to_quantity=stock.on_hand,
+                    reference=shipment.reference,
+                    notes=f"Received via shipment {shipment.reference}",
+                )
+            except InboundItem.DoesNotExist:
+                raise ValueError(f"Variant {variant_id} not in this shipment")
+
+        all_received = not shipment.items.filter(
+            received_quantity__lt=F("expected_quantity")
+        ).exists()
+
+        if all_received:
+            shipment.status = self.model.Status.RECEIVED
+            shipment.received_at = timezone.now()
+        else:
+            shipment.status = self.model.Status.PARTIAL
+        shipment.save()
+
+        return shipment
 
 
 class InboundShipment(models.Model):
@@ -122,6 +286,8 @@ class InboundShipment(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = InboundShipmentManager()
 
     class Meta:
         ordering = ["expected_at"]

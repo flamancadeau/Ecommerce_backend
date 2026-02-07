@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.utils import timezone
 from apps.catalog.models import Product, Variant
 from apps.promotions.models import Campaign, CampaignDiscount
-from apps.pricing.services import PricingService
+from apps.pricing.models import PriceBook
 
 pytestmark = pytest.mark.django_db
 
@@ -91,8 +91,8 @@ class TestPricingStacking:
             campaign=camp_a, discount_type="percentage", value=Decimal("10.00")
         )
 
-        result = PricingService.calculate_item_price(
-            variant_id=variant.id, quantity=1, at_time=now, customer_context={}
+        result = PriceBook.objects.calculate_price(
+            variant=variant, quantity=1, at_time=now, context={}
         )
 
         assert result["base_price"] == 100.00
@@ -135,8 +135,8 @@ class TestPricingStacking:
             campaign=camp_b, discount_type="percentage", value=Decimal("20.00")
         )
 
-        result = PricingService.calculate_item_price(
-            variant_id=variant.id, quantity=1, at_time=now, customer_context={}
+        result = PriceBook.objects.calculate_price(
+            variant=variant, quantity=1, at_time=now, context={}
         )
 
         assert result["discount_amount"] == 50.00
@@ -160,7 +160,7 @@ class TestPricingStacking:
             campaign=camp, discount_type="percentage", value=Decimal("15.00")
         )
 
-        url = "/api/pricing/explain/"
+        url = "/api/v1/pricing/explain/"
         data = {"variant_id": str(variant.id), "at": now.isoformat()}
         response = client.post(url, data=data, format="json")
         assert response.status_code == 200
