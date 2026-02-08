@@ -35,7 +35,6 @@ class PriceBookManager(models.Manager):
         from apps.promotions.models import Campaign
         from apps.inventory.models import Stock
 
-        # 1. Base Price
         currency = context.get("currency", "EUR")
         country = context.get("country", "")
         channel = context.get("channel", "web")
@@ -61,7 +60,6 @@ class PriceBookManager(models.Manager):
             base_price = variant.base_price
             price_book_info = None
 
-        # 2. Campaigns
         applicable_campaigns = Campaign.objects.get_applicable(
             variant, context, at_time, quantity
         )
@@ -108,7 +106,6 @@ class PriceBookManager(models.Manager):
             final_price = Decimal("0")
             discount_amount = base_price
 
-        # 3. Tax
         tax_rate_obj = TaxRate.objects.get_rate(
             country=context.get("country", "DE"), tax_class=variant.tax_class
         )
@@ -122,7 +119,6 @@ class PriceBookManager(models.Manager):
         total_tax = tax_amount * quantity
         total_price = (final_price + tax_amount) * quantity
 
-        # 4. Inventory
         availability = Stock.objects.check_availability(variant.id, quantity)
 
         return {

@@ -147,7 +147,6 @@ class OrderManager(models.Manager):
             res.status = Reservation.Status.CONFIRMED
             res.save()
 
-            # Calculate Price
             price_data = PriceBook.objects.calculate_price(
                 res.variant, context, res.quantity, current_time
             )
@@ -280,7 +279,6 @@ class Order(models.Model):
             ).count()
             self.order_number = f"ORD-{date_str}-{last_order + 1:04d}"
 
-        # Ensure Decimal safety
         for field in ("subtotal", "tax_amount", "shipping_amount", "total"):
             value = getattr(self, field)
             if isinstance(value, (int, float)):
@@ -353,21 +351,18 @@ class ReservationManager(models.Manager):
         reservation_token = str(uuid.uuid4())
         expires_at = timezone.now() + timezone.timedelta(minutes=15)
 
-        # Access Variant through items
         items = cart.items.select_related("variant").all()
 
         for item in items:
             variant = item.variant
             quantity = item.quantity
 
-            # Find fulfillment options (from Stock model)
             stock_option = Stock.objects.find_fulfillment(variant.id, quantity)
             if not stock_option:
                 raise ValidationError(
                     f"Insufficient stock for {variant.sku} (Global check)"
                 )
 
-            # Select for update to lock
             locked_stock = Stock.objects.select_for_update().get(id=stock_option.id)
 
             if not locked_stock.can_fulfill(quantity):

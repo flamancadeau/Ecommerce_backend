@@ -68,7 +68,6 @@ class ScheduledJobManager(models.Manager):
 
         campaign = Campaign.objects.get(id=campaign_id)
 
-        # Parse time if string
         if isinstance(activate_at, str):
             activate_at = timezone.datetime.fromisoformat(
                 activate_at.replace("Z", "+00:00")

@@ -42,7 +42,7 @@ class CampaignAdmin(admin.ModelAdmin):
     inlines = [CampaignRuleInline, CampaignDiscountInline]
 
     def status(self, obj):
-        # Handle None values for new objects
+
         if not obj.start_at or not obj.end_at:
             return format_html(
                 '<span style="color: gray; font-weight: bold;">Not Set</span>'

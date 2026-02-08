@@ -350,7 +350,6 @@ def explain_price(request):
 
         variant = get_object_or_404(Variant, id=variant_id)
 
-        # Use the central calculation logic
         final_calculation = PriceBook.objects.calculate_price(
             variant, customer_context, quantity, at_time
         )
@@ -427,7 +426,6 @@ def explain_price(request):
             if campaign.end_at < at_time:
                 c_mismatches.append(f"Already expired ({campaign.end_at})")
 
-            # Check eligibility using campaign model methods
             if not campaign.is_customer_eligible(customer_context):
                 c_mismatches.append(
                     f"Customer group not eligible. Allowed: {campaign.customer_groups}"
@@ -473,7 +471,7 @@ def explain_price(request):
         return Response(
             {
                 "status": True,
-                "message": "Price explanation generated with troubleshooting diagnostics",
+                "message": "Price explanation generated",
                 "data": explanation,
             }
         )

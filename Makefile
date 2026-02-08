@@ -63,7 +63,7 @@ celery-worker:
 	celery -A ecommerce worker -l info
 
 celery-beat:
-	celery -A ecommerce beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+	celery -A ecommerce beat -l info
 
 celery-flower:
 	celery -A ecommerce flower

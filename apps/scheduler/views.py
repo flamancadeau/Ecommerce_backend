@@ -244,7 +244,7 @@ class IdempotencyKeyViewSet(viewsets.ModelViewSet):
     queryset = IdempotencyKey.objects.all()
     serializer_class = IdempotencyKeySerializer
     permission_classes = [IsAuthenticated]
-    http_method_names = ["get", "post", "delete", "head", "options"]  # Added "delete"
+    http_method_names = ["get", "post", "delete", "head", "options"]
     filter_backends = [
         DjangoFilterBackend,
         filters.SearchFilter,

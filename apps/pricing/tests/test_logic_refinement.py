@@ -17,7 +17,6 @@ class TestPricingRefinement:
             product=product, sku="LAP-001", base_price=Decimal("1000.00")
         )
 
-        # Default Price Book
         default_pb = PriceBook.objects.create(
             name="Default EUR", currency="EUR", is_default=True, is_active=True
         )
@@ -28,7 +27,6 @@ class TestPricingRefinement:
             min_quantity=1,
         )
 
-        # Region Specific Price Book (Germany)
         germany_pb = PriceBook.objects.create(
             name="Germany Retail",
             currency="EUR",
@@ -37,7 +35,6 @@ class TestPricingRefinement:
             is_active=True,
         )
 
-        # Tier 1: 1-5 items
         PriceBookEntry.objects.create(
             price_book=germany_pb,
             variant=variant,
@@ -46,7 +43,6 @@ class TestPricingRefinement:
             max_quantity=5,
         )
 
-        # Tier 2: 6+ items
         PriceBookEntry.objects.create(
             price_book=germany_pb,
             variant=variant,
@@ -60,7 +56,6 @@ class TestPricingRefinement:
         variant = setup_data["variant"]
         ctx = {"country": "DE", "channel": "retail", "membership_tier": ""}
 
-        # Test Tier 1 (qty=3)
         price_data = PriceBook.objects.calculate_price(
             variant=variant,
             quantity=3,
@@ -70,7 +65,6 @@ class TestPricingRefinement:
         assert price_data["final_unit_price"] == 900.00
         assert price_data["price_book_used"]["price_book_name"] == "Germany Retail"
 
-        # Test Tier 2 (qty=10)
         price_data = PriceBook.objects.calculate_price(
             variant=variant,
             quantity=10,
@@ -83,7 +77,6 @@ class TestPricingRefinement:
         variant = setup_data["variant"]
         ctx = {"country": "FR", "channel": "retail", "membership_tier": ""}
 
-        # Test Missing Context (e.g. France) -> Should fall back to Default
         price_data = PriceBook.objects.calculate_price(
             variant=variant,
             quantity=1,
@@ -99,7 +92,6 @@ class TestPricingRefinement:
 
         from apps.pricing.serializers import PriceBookEntrySerializer
 
-        # Test Invalid Quantities (max < min)
         data = {
             "price_book": default_pb.id,
             "variant": variant.id,

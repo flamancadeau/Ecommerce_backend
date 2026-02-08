@@ -69,7 +69,7 @@ class StockQuerySet(models.QuerySet):
         return self.filter(backorderable=True)
 
     def find_fulfillment(self, variant_id, quantity):
-        # Logic from Repository
+
         stock = (
             self.filter(
                 variant_id=variant_id,
@@ -92,7 +92,7 @@ class StockQuerySet(models.QuerySet):
         )
 
     def check_availability(self, variant_id, quantity, warehouse=None):
-        # Logic from Service/Repository
+
         query = self.filter(variant_id=variant_id, warehouse__is_active=True)
         if warehouse:
             query = query.filter(warehouse=warehouse)
@@ -224,7 +224,6 @@ class InboundShipmentManager(models.Manager):
                 item.received_quantity += qty
                 item.save()
 
-                # Update stock
                 stock, _ = Stock.objects.select_for_update().get_or_create(
                     variant_id=variant_id, warehouse=item.warehouse
                 )
@@ -340,7 +339,7 @@ class InboundItem(models.Model):
     warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE)
     expected_quantity = models.IntegerField(
         validators=[MinValueValidator(1)], null=True, blank=True
-    )  # Made nullable
+    )
     received_quantity = models.IntegerField(
         default=0, validators=[MinValueValidator(0)]
     )

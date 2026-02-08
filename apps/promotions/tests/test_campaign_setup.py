@@ -3,7 +3,6 @@ from django.utils import timezone
 from apps.promotions.models import Campaign, CampaignRule, CampaignDiscount
 from apps.promotions.serializers import CampaignSerializer
 from rest_framework.test import APIRequestFactory
-import json
 
 
 @pytest.mark.django_db
@@ -43,7 +42,7 @@ class TestCampaignSetup:
         """
         Verify that our fix for date-string-vs-datetime comparison works.
         """
-        # This data uses strings for dates
+
         campaign_data = {
             "name": "Date Fix Test",
             "start_at": "2026-02-01T00:00:00Z",
@@ -54,7 +53,6 @@ class TestCampaignSetup:
         assert serializer.is_valid()
         campaign = serializer.save()
 
-        # If we reach here, it didn't crash. Let's verify status.
         assert campaign.status in ["active", "scheduled", "expired"]
         from datetime import datetime
 

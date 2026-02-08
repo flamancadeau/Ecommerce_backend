@@ -78,7 +78,7 @@ class IdempotencyKeySerializer(serializers.ModelSerializer):
             validated_data["key"] = IdempotencyKey.objects.generate_key()
 
         if "expires_at" not in validated_data:
-            # Default expiration: 24 hours from now
+
             validated_data["expires_at"] = timezone.now() + timezone.timedelta(hours=24)
 
         return super().create(validated_data)
