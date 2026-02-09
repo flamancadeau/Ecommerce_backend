@@ -52,6 +52,14 @@ class StockSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        read_only_fields = [
+            "id",
+            "on_hand",
+            "reserved",
+            "available",
+            "created_at",
+            "updated_at",
+        ]
 
     def validate(self, data):
         instance = getattr(self, "instance", None)
@@ -135,7 +143,13 @@ class InboundItemSerializer(serializers.ModelSerializer):
             "expected_quantity",
             "received_quantity",
             "unit_cost",
+            "received_at",
             "notes",
+            "remaining_quantity",
+            "is_fully_received",
+        ]
+        read_only_fields = [
+            "id",
             "remaining_quantity",
             "is_fully_received",
         ]
@@ -250,7 +264,7 @@ class InboundShipmentWriteSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ("received_at",)
+        read_only_fields = []
 
     def validate_items(self, value):
         if not value or len(value) == 0:
@@ -331,4 +345,4 @@ class InboundShipmentSerializer(serializers.ModelSerializer):
             "updated_at",
             "is_overdue",
         ]
-        read_only_fields = ("received_at",)
+        read_only_fields = []

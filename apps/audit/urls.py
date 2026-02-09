@@ -8,5 +8,5 @@ router.register(r"inventory-audits", InventoryAuditViewSet, basename="inventory-
 router.register(r"campaign-audits", CampaignAuditViewSet, basename="campaign-audit")
 
 urlpatterns = [
-    path("api/audit/", include(router.urls)),
+    path("", include(router.urls)),
 ]

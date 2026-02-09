@@ -32,3 +32,5 @@ htmlcov/
 
 # Database
 *.db
+*.md
+!README.md

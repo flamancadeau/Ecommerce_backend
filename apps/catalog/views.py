@@ -11,15 +11,17 @@ from rest_framework import serializers
 
 
 class ProductViewSet(viewsets.ModelViewSet):
-    queryset = Product.objects.all()
+    queryset = (
+        Product.objects.select_related("category").prefetch_related("variants").all()
+    )
     serializer_class = ProductSerializer
 
     def create(self, request, *args, **kwargs):
-
         serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         try:
-            serializer.is_valid(raise_exception=True)
             self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
             return Response(
                 {
                     "success": True,
@@ -27,28 +29,18 @@ class ProductViewSet(viewsets.ModelViewSet):
                     "data": serializer.data,
                 },
                 status=status.HTTP_201_CREATED,
-            )
-        except serializers.ValidationError as e:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Failed to create product.",
-                    "errors": e.detail,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+                headers=headers,
             )
         except Exception as e:
             return Response(
                 {
                     "success": False,
-                    "message": f"An error occurred: {str(e)}",
-                    "errors": None,
+                    "message": f"Failed to create product: {str(e)}",
                 },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
     def list(self, request, *args, **kwargs):
-
         queryset = self.filter_queryset(self.get_queryset())
         serializer = self.get_serializer(queryset, many=True)
         return Response(
@@ -57,103 +49,56 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "message": "Products retrieved successfully!",
                 "data": serializer.data,
                 "count": len(serializer.data),
-            },
-            status=status.HTTP_200_OK,
+            }
         )
 
     def retrieve(self, request, *args, **kwargs):
-
-        try:
-            product = self.get_object()
-            serializer = self.get_serializer(product)
-            return Response(
-                {
-                    "success": True,
-                    "message": "Product retrieved successfully!",
-                    "data": serializer.data,
-                },
-                status=status.HTTP_200_OK,
-            )
-        except NotFound:
-            return Response(
-                {"success": False, "message": "Product not found.", "errors": None},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        except Exception as e:
-            return Response(
-                {
-                    "success": False,
-                    "message": f"An error occurred: {str(e)}",
-                    "errors": None,
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        product = self.get_object()
+        serializer = self.get_serializer(product)
+        return Response(
+            {
+                "success": True,
+                "message": "Product retrieved successfully!",
+                "data": serializer.data,
+            }
+        )
 
     def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
 
         try:
-            product = self.get_object()
-            serializer = self.get_serializer(product, data=request.data, partial=True)
-            serializer.is_valid(raise_exception=True)
             self.perform_update(serializer)
             return Response(
                 {
                     "success": True,
                     "message": "Product updated successfully!",
                     "data": serializer.data,
-                },
-                status=status.HTTP_200_OK,
-            )
-        except serializers.ValidationError as e:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Failed to update product.",
-                    "errors": e.detail,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        except NotFound:
-            return Response(
-                {"success": False, "message": "Product not found.", "errors": None},
-                status=status.HTTP_404_NOT_FOUND,
+                }
             )
         except Exception as e:
             return Response(
-                {
-                    "success": False,
-                    "message": f"An error occurred: {str(e)}",
-                    "errors": None,
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                {"success": False, "message": f"Failed to update product: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
     def destroy(self, request, *args, **kwargs):
-
         try:
             product = self.get_object()
-            self.perform_destroy(product)
+            product.deactivate()
             return Response(
                 {
                     "success": True,
-                    "message": "Product deleted successfully!",
-                    "data": None,
+                    "message": "Product deactivated successfully!",
                 },
                 status=status.HTTP_204_NO_CONTENT,
             )
-        except NotFound:
-            return Response(
-                {"success": False, "message": "Product not found.", "errors": None},
-                status=status.HTTP_404_NOT_FOUND,
-            )
         except Exception as e:
             return Response(
-                {
-                    "success": False,
-                    "message": f"An error occurred: {str(e)}",
-                    "errors": None,
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                {"success": False, "message": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
 

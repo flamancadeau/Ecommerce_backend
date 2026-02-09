@@ -56,7 +56,6 @@ def check_campaign_activations():
             payload={"campaign_id": str(campaign.id), "action": "deactivated"},
         )
 
-    # Clear cache if changes happened
     if activated_count > 0 or deactivated_count > 0:
         cache.delete("active_campaigns")
         cache.delete("campaign_rules")

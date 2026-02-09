@@ -6,10 +6,19 @@ from django.db import transaction, models
 from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
-import uuid
 
+
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 from .models import Cart, CartItem, Order, OrderItem, Reservation
-from .serializers import CartSerializer, CartItemSerializer, OrderSerializer
+from .serializers import (
+    CartSerializer,
+    CartItemSerializer,
+    OrderSerializer,
+    CartItemAddSerializer,
+    CartItemUpdateSerializer,
+    CartItemRemoveSerializer,
+)
 from apps.audit.idempotency import idempotent_request
 from apps.catalog.models import Variant
 from apps.inventory.models import Stock, Warehouse
@@ -36,21 +45,23 @@ class CartViewSet(viewsets.ModelViewSet):
 
     def get_object(self):
         cart_id = self.kwargs.get("id")
-        if cart_id:
+        if cart_id and cart_id != "current":
             try:
                 return Cart.objects.get(id=cart_id)
-            except Cart.DoesNotExist:
+            except (Cart.DoesNotExist, ValidationError):
                 raise NotFound("Cart not found")
 
         user = self.request.user
-        session_key = self.request.session.session_key
+        request_data = self.request.data if isinstance(self.request.data, dict) else {}
+
+        session_key = request_data.get("session_id") or self.request.session.session_key
 
         if not session_key:
-            self.request.session.create()
+            if not self.request.session.session_key:
+                self.request.session.create()
             session_key = self.request.session.session_key
 
         if user.is_authenticated:
-
             cart = Cart.objects.filter(user_id=user.id).first()
             if cart:
                 return cart
@@ -74,20 +85,31 @@ class CartViewSet(viewsets.ModelViewSet):
 
         return cart
 
+    @swagger_auto_schema(
+        request_body=CartItemAddSerializer,
+        responses={200: CartItemSerializer(), 400: "Validation Error"},
+    )
+    @action(detail=False, methods=["post"], url_path="add-item")
+    @transaction.atomic
+    def add_item_collection(self, request):
+        """Add item to current session/user cart"""
+        return self.add_item(request)
+
+    @swagger_auto_schema(
+        request_body=CartItemAddSerializer,
+        responses={200: CartItemSerializer(), 400: "Validation Error"},
+    )
     @action(detail=True, methods=["post"], url_path="add-item")
     @transaction.atomic
     def add_item(self, request, id=None):
         """Add item to cart with basic inventory check"""
         cart = self.get_object()
 
-        variant_id = request.data.get("variant_id")
-        quantity = int(request.data.get("quantity", 1))
+        serializer = CartItemAddSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        if not variant_id:
-            raise ValidationError("variant_id is required")
-
-        if quantity <= 0:
-            raise ValidationError("Quantity must be greater than 0")
+        variant_id = serializer.validated_data["variant_id"]
+        quantity = serializer.validated_data["quantity"]
 
         try:
             variant = Variant.objects.select_related("product").get(
@@ -126,21 +148,39 @@ class CartViewSet(viewsets.ModelViewSet):
         cart.expires_at = timezone.now() + timedelta(days=7)
         cart.save()
 
-        serializer = CartItemSerializer(cart_item)
-        return Response(serializer.data)
+        return Response(CartItemSerializer(cart_item).data)
 
+    @swagger_auto_schema(
+        request_body=CartItemUpdateSerializer,
+        responses={
+            200: CartItemSerializer(),
+            404: "Not Found",
+            400: "Validation Error",
+        },
+    )
+    @action(detail=False, methods=["post"], url_path="update-item")
+    def update_item_collection(self, request):
+        """Update item quantity in current cart"""
+        return self.update_item(request)
+
+    @swagger_auto_schema(
+        request_body=CartItemUpdateSerializer,
+        responses={
+            200: CartItemSerializer(),
+            404: "Not Found",
+            400: "Validation Error",
+        },
+    )
     @action(detail=True, methods=["post"], url_path="update-item")
     def update_item(self, request, id=None):
         """Update item quantity in cart"""
         cart = self.get_object()
-        variant_id = request.data.get("variant_id")
-        quantity = int(request.data.get("quantity", 1))
 
-        if not variant_id:
-            raise ValidationError("variant_id is required")
+        serializer = CartItemUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        if quantity <= 0:
-            raise ValidationError("Quantity must be greater than 0")
+        variant_id = serializer.validated_data["variant_id"]
+        quantity = serializer.validated_data["quantity"]
 
         try:
             cart_item = CartItem.objects.get(cart=cart, variant_id=variant_id)
@@ -155,17 +195,30 @@ class CartViewSet(viewsets.ModelViewSet):
         cart_item.quantity = quantity
         cart_item.save()
 
-        serializer = CartItemSerializer(cart_item)
-        return Response(serializer.data)
+        return Response(CartItemSerializer(cart_item).data)
 
+    @swagger_auto_schema(
+        request_body=CartItemRemoveSerializer,
+        responses={200: "Item removed", 404: "Not Found"},
+    )
+    @action(detail=False, methods=["post"], url_path="remove-item")
+    def remove_item_collection(self, request):
+        """Remove item from current cart"""
+        return self.remove_item(request)
+
+    @swagger_auto_schema(
+        request_body=CartItemRemoveSerializer,
+        responses={200: "Item removed", 404: "Not Found"},
+    )
     @action(detail=True, methods=["post"], url_path="remove-item")
     def remove_item(self, request, id=None):
         """Remove item from cart"""
         cart = self.get_object()
-        variant_id = request.data.get("variant_id")
 
-        if not variant_id:
-            raise ValidationError("variant_id is required")
+        serializer = CartItemRemoveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        variant_id = serializer.validated_data["variant_id"]
 
         deleted, _ = CartItem.objects.filter(cart=cart, variant_id=variant_id).delete()
 
@@ -174,194 +227,188 @@ class CartViewSet(viewsets.ModelViewSet):
         raise NotFound("Item not found in cart")
 
     def _check_availability(self, variant, requested_quantity):
-        """Check stock availability"""
-        try:
-            total_stock = (
-                Stock.objects.filter(
-                    variant=variant, warehouse__is_active=True
-                ).aggregate(total=models.Sum("available"))["total"]
-                or 0
-            )
-
-            reserved = (
-                Reservation.objects.filter(
-                    variant=variant, status="pending", expires_at__gt=timezone.now()
-                ).aggregate(total=models.Sum("quantity"))["total"]
-                or 0
-            )
-
-            return max(0, total_stock - reserved)
-        except Exception as e:
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.error(f"Stock check error: {e}")
-            return 0
+        """Check stock availability using central service"""
+        availability = Stock.objects.check_availability(variant.id, requested_quantity)
+        return availability["available_quantity"]
 
 
 class CheckoutViewSet(viewsets.ViewSet):
     permission_classes = [permissions.AllowAny]
 
-    @action(detail=False, methods=["post"], url_path="create-order")
-    @idempotent_request()
+    @swagger_auto_schema(
+        operation_description="Reserve inventory for items in a cart before placing an order.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["cart_id"],
+            properties={
+                "cart_id": openapi.Schema(
+                    type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID
+                ),
+            },
+        ),
+        responses={201: "Inventory Reserved", 400: "Validation Error"},
+    )
+    @action(detail=False, methods=["post"], url_path="reserve")
     @transaction.atomic
-    def create_order(self, request):
-        """Create order from cart"""
+    def reserve(self, request):
+        """
+        Reserve inventory for a cart.
+        Returns a reservation token.
+        """
+        cart_id = request.data.get("cart_id")
+        if not cart_id:
+            raise ValidationError("cart_id is required")
+
+        try:
+            result = Reservation.objects.create_from_cart(cart_id)
+            return Response(
+                {
+                    "status": True,
+                    "message": "Inventory reserved",
+                    "data": result,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Reservation error: {e}")
+            return Response(
+                {"error": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @swagger_auto_schema(
+        operation_description="Finalize checkout and place an order. Use either reservation_token or cart_id.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["email", "shipping_address"],
+            properties={
+                "reservation_token": openapi.Schema(
+                    type=openapi.TYPE_STRING, description="Token from /reserve/"
+                ),
+                "cart_id": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="Direct order from cart",
+                ),
+                "email": openapi.Schema(
+                    type=openapi.TYPE_STRING, format=openapi.FORMAT_EMAIL
+                ),
+                "shipping_address": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "street": openapi.Schema(type=openapi.TYPE_STRING),
+                        "city": openapi.Schema(type=openapi.TYPE_STRING),
+                        "country": openapi.Schema(type=openapi.TYPE_STRING),
+                    },
+                ),
+            },
+        ),
+        responses={201: OrderSerializer()},
+    )
+    @action(detail=False, methods=["post"], url_path="place-order")
+    @idempotent_request()
+    def place_order(self, request):
+        """
+        Place an order.
+        Can be called with 'reservation_token' (preferred) or 'cart_id' (direct).
+        """
+        reservation_token = request.data.get("reservation_token")
         cart_id = request.data.get("cart_id")
         email = request.data.get("email")
         shipping_address = request.data.get("shipping_address")
 
-        if not all([cart_id, email, shipping_address]):
-            raise ValidationError(
-                "Missing required fields: cart_id, email, shipping_address"
-            )
+        if not email or not shipping_address:
+            raise ValidationError("email and shipping_address are required")
 
         try:
-            cart = Cart.objects.get(id=cart_id)
-        except Cart.DoesNotExist:
-            raise NotFound("Cart not found")
-
-        if cart.is_expired:
-            raise ValidationError("Cart has expired")
-
-        if not cart.items.exists():
-            raise ValidationError("Cart is empty")
-
-        # Get active warehouse first
-        warehouse = Warehouse.objects.filter(is_active=True).first()
-        if not warehouse:
-            raise ValidationError("No active warehouse available")
-
-        subtotal = Decimal("0")
-        order_items_data = []
-
-        # Lock and update stock for each item
-        for cart_item in cart.items.all().select_related("variant", "variant__product"):
-            variant = cart_item.variant
-            quantity = cart_item.quantity
-
-            if (
-                variant.product.launch_date
-                and variant.product.launch_date > timezone.now()
-            ):
-                raise ValidationError(
-                    f"Product {variant.sku} is not available until {variant.product.launch_date}"
-                )
-
-            try:
-
-                stock = Stock.objects.select_for_update().get(
-                    variant=variant, warehouse=warehouse
-                )
-            except Stock.DoesNotExist:
-                raise ValidationError(f"Stock not found for {variant.sku}")
-
-            if stock.available < quantity:
-
-                if not (
-                    stock.backorderable
-                    and (
-                        stock.backorder_limit == 0 or quantity <= stock.backorder_limit
-                    )
-                ):
-                    raise ValidationError(
-                        f"Insufficient stock for {variant.sku}. Available: {stock.available}"
-                    )
-
-            old_qty = stock.on_hand
-            stock.on_hand -= quantity
-            stock.save()
-
-            from apps.audit.models import InventoryAudit
-
-            InventoryAudit.objects.create(
-                event_type="fulfillment",
-                variant=variant,
-                warehouse=warehouse,
-                quantity=quantity,
-                from_quantity=old_qty,
-                to_quantity=stock.on_hand,
-                notes="Order fulfillment",
-            )
-
-            item_total = cart_item.unit_price * Decimal(quantity)
-            subtotal += item_total
-
-            order_items_data.append(
-                {
-                    "variant": variant,
-                    "quantity": quantity,
-                    "unit_price": cart_item.unit_price,
-                    "sku": variant.sku,
-                    "variant_name": (
-                        variant.product.name if variant.product else variant.sku
+            if reservation_token:
+                order = Order.objects.create_from_reservation(
+                    reservation_token,
+                    email,
+                    shipping_address,
+                    customer_id=(
+                        request.user.id if request.user.is_authenticated else None
                     ),
-                    "warehouse": warehouse,
-                }
+                )
+            elif cart_id:
+                order = Order.objects.create_direct_order(
+                    cart_id,
+                    email,
+                    shipping_address,
+                    customer_id=(
+                        request.user.id if request.user.is_authenticated else None
+                    ),
+                )
+            else:
+                raise ValidationError("Either reservation_token or cart_id is required")
+
+            serializer = OrderSerializer(order)
+            return Response(
+                {
+                    "status": True,
+                    "message": "Order placed successfully",
+                    "data": {
+                        "order": serializer.data,
+                        "order_number": order.order_number,
+                        "total": str(order.total),
+                    },
+                },
+                status=status.HTTP_201_CREATED,
             )
 
-        tax_rate = Decimal("0.21")
-        tax_amount = subtotal * tax_rate
-        shipping_amount = Decimal("5.99")
-        total = subtotal + tax_amount + shipping_amount
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            import logging
 
-        order = Order.objects.create(
-            customer_id=cart.user_id,
-            customer_email=email,
-            shipping_address=shipping_address,
-            billing_address=shipping_address,
-            subtotal=subtotal,
-            tax_amount=tax_amount,
-            shipping_amount=shipping_amount,
-            total=total,
-            status="confirmed",
-        )
-
-        for item_data in order_items_data:
-            OrderItem.objects.create(
-                order=order,
-                warehouse=item_data["warehouse"],
-                variant=item_data["variant"],
-                quantity=item_data["quantity"],
-                unit_price=item_data["unit_price"],
-                sku=item_data["sku"],
-                variant_name=item_data["variant_name"],
+            logger = logging.getLogger(__name__)
+            logger.error(f"Order placement error: {e}")
+            return Response(
+                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-        cart.items.all().delete()
-        cart.expires_at = timezone.now()
-        cart.save()
-
-        serializer = OrderSerializer(order)
-        return Response(
-            {
-                "order": serializer.data,
-                "order_number": order.order_number,
-                "total": str(total),
+    @swagger_auto_schema(
+        operation_description="Finalize checkout and place an order. Use either reservation_token or cart_id.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["email", "shipping_address"],
+            properties={
+                "reservation_token": openapi.Schema(
+                    type=openapi.TYPE_STRING, description="Token from /reserve/"
+                ),
+                "cart_id": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_UUID,
+                    description="Direct order from cart",
+                ),
+                "email": openapi.Schema(
+                    type=openapi.TYPE_STRING, format=openapi.FORMAT_EMAIL
+                ),
+                "shipping_address": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "street": openapi.Schema(type=openapi.TYPE_STRING),
+                        "city": openapi.Schema(type=openapi.TYPE_STRING),
+                        "country": openapi.Schema(type=openapi.TYPE_STRING),
+                    },
+                ),
             },
-            status=status.HTTP_201_CREATED,
-        )
+        ),
+        responses={201: OrderSerializer()},
+    )
+    @action(detail=False, methods=["post"], url_path="create-order")
+    def create_order(self, request):
+        return self.place_order(request)
 
     def _check_variant_availability(self, variant, quantity):
-        """Check stock availability for variant"""
-        try:
-            total_stock = (
-                Stock.objects.filter(
-                    variant=variant, warehouse__is_active=True
-                ).aggregate(total=models.Sum("available"))["total"]
-                or 0
-            )
-
-            reserved = (
-                Reservation.objects.filter(
-                    variant=variant, status="pending", expires_at__gt=timezone.now()
-                ).aggregate(total=models.Sum("quantity"))["total"]
-                or 0
-            )
-
-            return max(0, total_stock - reserved)
-        except Exception:
-            return 0
+        """Check stock availability for variant using central service"""
+        availability = Stock.objects.check_availability(variant.id, quantity)
+        return availability["available_quantity"]
 
 
 class OrderViewSet(viewsets.ReadOnlyModelViewSet):

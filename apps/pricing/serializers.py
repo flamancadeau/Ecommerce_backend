@@ -21,6 +21,30 @@ class PriceBookSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at", "code"]
 
+    def validate(self, attrs):
+        """Custom validation to provide a helpful error message for duplicate context."""
+        country = attrs.get("country", "")
+        channel = attrs.get("channel", "")
+        customer_group = attrs.get("customer_group", "")
+
+        qs = PriceBook.objects.filter(
+            country=country, channel=channel, customer_group=customer_group
+        )
+
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+
+        existing = qs.first()
+        if existing:
+
+            raise serializers.ValidationError(
+                {
+                    "context_error": f"You already have a Price Book named '{existing.name}' (ID: {existing.id}) for this combination of Country ({country or 'Global'}), Channel ({channel}), and Group ({customer_group}).",
+                    "suggestion": "Please edit the existing Price Book instead of creating a new one.",
+                }
+            )
+        return attrs
+
 
 class PriceBookEntrySerializer(serializers.ModelSerializer):
     class Meta:
@@ -57,6 +81,17 @@ class PriceBookEntrySerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "Only one of 'variant', 'product' or 'category' may be set."
             )
+
+        min_q = attrs.get("min_quantity", 1)
+        max_q = attrs.get("max_quantity")
+
+        if max_q is not None and max_q < min_q:
+            raise serializers.ValidationError(
+                {
+                    "max_quantity": f"Max quantity ({max_q}) cannot be less than Min quantity ({min_q})."
+                }
+            )
+
         return attrs
 
 
@@ -101,5 +136,12 @@ class PriceQuoteRequestSerializer(serializers.Serializer):
     items = PriceQuoteItemSerializer(many=True)
 
 
-class ExplainPriceQuerySerializer(serializers.Serializer):
+class PriceExplainRequestSerializer(serializers.Serializer):
     variant_id = serializers.UUIDField(help_text="UUID of the variant")
+    quantity = serializers.IntegerField(
+        required=False, default=1, min_value=1, help_text="Quantity to calculate for"
+    )
+    at = serializers.DateTimeField(
+        required=False, help_text="ISO timestamp for price-as-of-time"
+    )
+    customer_context = CustomerContextSerializer(required=False)

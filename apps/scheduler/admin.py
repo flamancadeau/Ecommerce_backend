@@ -1,36 +1,6 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import IdempotencyKey, ScheduledJob
-
-
-@admin.register(IdempotencyKey)
-class IdempotencyKeyAdmin(admin.ModelAdmin):
-    list_display = (
-        "key_short",
-        "status",
-        "created_at",
-        "expires_at",
-        "is_expired",
-        "has_response",
-    )
-    list_filter = ("status", "created_at")
-    search_fields = ("key", "request_hash")
-    readonly_fields = ("created_at", "is_expired", "has_response")
-
-    def key_short(self, obj):
-        return obj.key[:20] + "..." if len(obj.key) > 20 else obj.key
-
-    key_short.short_description = "Key"
-
-    def is_expired(self, obj):
-        return obj.is_expired
-
-    is_expired.boolean = True
-
-    def has_response(self, obj):
-        return obj.response is not None
-
-    has_response.boolean = True
+from .models import ScheduledJob
 
 
 @admin.register(ScheduledJob)

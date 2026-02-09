@@ -17,12 +17,13 @@ schema_view = get_schema_view(
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("api/catalog/", include("apps.catalog.urls")),
-    path("api/inventory/", include("apps.inventory.urls")),
-    path("api/pricing/", include("apps.pricing.urls")),
-    path("api/promotions/", include("apps.promotions.urls")),
-    path("api/orders/", include("apps.orders.urls")),
-    path("api/scheduler/", include("apps.scheduler.urls")),
+    path("api/v1/catalog/", include("apps.catalog.urls")),
+    path("api/v1/inventory/", include("apps.inventory.urls")),
+    path("api/v1/pricing/", include("apps.pricing.urls")),
+    path("api/v1/promotions/", include("apps.promotions.urls")),
+    path("api/v1/orders/", include("apps.orders.urls")),
+    path("api/v1/scheduler/", include("apps.scheduler.urls")),
+    path("api/v1/audit/", include("apps.audit.urls")),
     re_path(
         r"^swagger(?P<format>\.json|\.yaml)$",
         schema_view.without_ui(cache_timeout=0),

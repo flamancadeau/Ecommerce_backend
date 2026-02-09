@@ -15,5 +15,5 @@ router.register(
 )
 router.register(r"inbound-items", InboundItemViewSet, basename="inbounditem")
 urlpatterns = [
-    path("api/v1/", include(router.urls)),
+    path("", include(router.urls)),
 ]

@@ -13,18 +13,17 @@ def update_product_cache():
     Update product catalog cache in Redis.
     Runs every 30 minutes via Celery Beat.
     """
-    # Cache active categories
-    categories = Category.objects.filter(is_active=True).values("id", "name", "slug")
-    cache.set("active_categories", list(categories), timeout=3600)  # 1 hour
 
-    # Cache popular products (simplified - in real app use views/sales data)
+    categories = Category.objects.filter(is_active=True).values("id", "name", "slug")
+    cache.set("active_categories", list(categories), timeout=3600)
+
     popular_products = (
         Product.objects.filter(is_active=True)
         .select_related("category")
         .prefetch_related(
             Prefetch("variants", queryset=Variant.objects.filter(is_active=True))
         )[:50]
-    )  # Top 50 products
+    )
 
     product_data = []
     for product in popular_products:
