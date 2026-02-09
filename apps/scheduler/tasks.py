@@ -38,6 +38,9 @@ def execute_scheduled_job(job_id):
             job.mark_as_failed(str(e))
 
             logger.error(f"Failed to execute job {job_id}: {str(e)}")
+            if "not a valid UUID" in str(e):
+                logger.warning(f"Aborting retry for {job_id} due to invalid data.")
+                return
 
             if job.should_retry():
                 retry_delay = 300

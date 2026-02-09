@@ -85,7 +85,7 @@ class IdempotencyKeySerializer(serializers.ModelSerializer):
 
 
 class CreateIdempotencyKeySerializer(serializers.ModelSerializer):
-    """Refined serializer for creating an idempotency key manually or automatically."""
+    """ creating an idempotency key manually or automatically."""
 
     key = serializers.CharField(
         required=False,

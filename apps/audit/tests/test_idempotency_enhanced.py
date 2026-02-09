@@ -57,7 +57,6 @@ class TestIdempotencyEnhanced:
 
     def test_failure_on_invalid_order_reference(self):
         """
-        Senior Move: Test the "Negative Path".
         What happens if the order_number doesn't exist?
         """
         data = {
@@ -71,4 +70,4 @@ class TestIdempotencyEnhanced:
         instance = serializer.save()
 
         assert instance.order is None
-        logger.warning("Handled missing order reference gracefully.")
+        logger.warning("Handled missing order reference .")

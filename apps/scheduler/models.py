@@ -198,16 +198,27 @@ class ScheduledJob(models.Model):
             cache.delete("active_campaigns")
             return {"action": "activated", "campaign": campaign.code}
 
-        elif self.job_type == self.JobType.CAMPAIGN_EXPIRATION:
+        if self.job_type == self.JobType.CAMPAIGN_ACTIVATION:
             from apps.promotions.models import Campaign
+            from django.core.exceptions import ValidationError
 
             campaign_id = payload.get("campaign_id")
-            campaign = Campaign.objects.get(id=campaign_id)
-            campaign.is_active = False
+            campaign_code = payload.get("campaign_code")
+
+            try:
+
+                campaign = Campaign.objects.get(id=campaign_id)
+            except (ValidationError, ValueError, Campaign.DoesNotExist):
+
+                logger.info(
+                    f"ID {campaign_id} invalid, trying lookup by code {campaign_code}"
+                )
+                campaign = Campaign.objects.get(code=campaign_code)
+
+            campaign.is_active = True
             campaign.save()
             cache.delete("active_campaigns")
-            return {"action": "deactivated", "campaign": campaign.code}
-
+            return {"action": "activated", "campaign": campaign.code}
         elif self.job_type == self.JobType.RESERVATION_EXPIRY:
             from apps.orders.models import Reservation
             from apps.inventory.models import Stock
